@@ -1,0 +1,1171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>ChiefEO</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <!-- Supabase JS client (ESM via CDN — loaded as a module below) -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #e2e8f0; }
+    #root { max-width: 430px; margin: 0 auto; min-height: 100vh; background: #f8fafc; position: relative; box-shadow: 0 0 40px rgba(0,0,0,0.12); }
+    input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0.6; }
+    input[type="range"] { -webkit-appearance: none; width: 100%; height: 6px; border-radius: 3px; background: #e2e8f0; outline: none; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #3b82f6; cursor: pointer; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="module">
+    // ─── Supabase client bootstrap ────────────────────────────────────────────
+    // Replace these two values with your Supabase project's URL and anon key.
+    // Find them at: https://supabase.com/dashboard → your project → Settings → API
+    const SUPABASE_URL  = "https://dsmbppzvembacitwdrsj.supabase.co";
+    const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRzbWJwcHp2ZW1iYWNpdHdkcnNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODgwOTAsImV4cCI6MjA5MjM2NDA5MH0.Tt_xcENjIQF7KvlhFZX46U1MWfwrYZLtZEAluZzDzN0";
+
+    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+    window.__supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+    // Signal to the Babel script below that Supabase is ready
+    window.__supabaseReady = true;
+    document.dispatchEvent(new Event("supabase-ready"));
+  </script>
+
+  <script type="text/babel">
+    const { useState, useMemo, useRef, useCallback, useEffect } = React;
+
+    // Wait for Supabase client to be injected by the module script above.
+    // In practice this is nearly instant — both scripts run before paint.
+    function getSupabase() { return window.__supabase; }
+
+    /* ══════════════════════════════════════════════════════════════
+       SUPABASE DATA LAYER
+       All reads/writes go through these helpers.
+       The rest of the app is storage-agnostic.
+    ══════════════════════════════════════════════════════════════ */
+
+    // ── DB row  ↔  app task  mapping ──────────────────────────────
+    function dbRowToTask(row) {
+      return {
+        id:            row.id,
+        name:          row.name,
+        startDate:     row.start_date,
+        dueDate:       row.due_date,
+        startPriority: parseFloat(row.start_priority),
+        peakPriority:  parseFloat(row.peak_priority),
+        postponeUntil: row.postpone_until || null,
+        complete:      row.complete,
+        trashed:       row.trashed,
+      };
+    }
+
+    function taskToDbRow(task, userId) {
+      return {
+        user_id:        userId,
+        name:           task.name,
+        start_date:     task.startDate,
+        due_date:       task.dueDate,
+        start_priority: task.startPriority,
+        peak_priority:  task.peakPriority,
+        postpone_until: task.postponeUntil || null,
+        complete:       task.complete ?? false,
+        trashed:        task.trashed ?? false,
+      };
+    }
+
+    async function dbLoadTasks(userId) {
+      const sb = getSupabase();
+      const { data, error } = await sb
+        .from("tasks")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("trashed", false)
+        .order("id", { ascending: false });
+      if (error) throw error;
+      return (data || []).map(dbRowToTask);
+    }
+
+    async function dbInsertTask(task, userId) {
+      const sb = getSupabase();
+      const { data, error } = await sb
+        .from("tasks")
+        .insert(taskToDbRow(task, userId))
+        .select()
+        .single();
+      if (error) throw error;
+      return dbRowToTask(data);
+    }
+
+    async function dbUpdateTask(id, changes, userId) {
+      const sb = getSupabase();
+      const dbChanges = {};
+      if (changes.name          !== undefined) dbChanges.name           = changes.name;
+      if (changes.startDate     !== undefined) dbChanges.start_date     = changes.startDate;
+      if (changes.dueDate       !== undefined) dbChanges.due_date       = changes.dueDate;
+      if (changes.startPriority !== undefined) dbChanges.start_priority = changes.startPriority;
+      if (changes.peakPriority  !== undefined) dbChanges.peak_priority  = changes.peakPriority;
+      if (changes.postponeUntil !== undefined) dbChanges.postpone_until = changes.postponeUntil || null;
+      if (changes.complete      !== undefined) dbChanges.complete       = changes.complete;
+      if (changes.trashed       !== undefined) dbChanges.trashed        = changes.trashed;
+      const { error } = await sb
+        .from("tasks")
+        .update(dbChanges)
+        .eq("id", id)
+        .eq("user_id", userId);
+      if (error) throw error;
+    }
+
+    async function dbLoadPriorities(userId) {
+      const sb = getSupabase();
+      const { data, error } = await sb
+        .from("priorities")
+        .select("config")
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? data.config : null;
+    }
+
+    async function dbSavePriorities(config, userId) {
+      const sb = getSupabase();
+      const { error } = await sb
+        .from("priorities")
+        .upsert({ user_id: userId, config, updated_at: new Date().toISOString() });
+      if (error) throw error;
+    }
+
+    /* ══════════════ Default priorities (no LPC-specific data) ══════════════ */
+    const DEFAULT_PRIORITIES = {
+      schemaVersion: 1,
+      lastModifiedAt: null,
+      people: [],
+      keywords: [
+        { id: "k1",  word: "urgent",          tier: "High",     default: true, enabled: true },
+        { id: "k2",  word: "ASAP",            tier: "High",     default: true, enabled: true },
+        { id: "k3",  word: "immediately",     tier: "High",     default: true, enabled: true },
+        { id: "k4",  word: "emergency",       tier: "High",     default: true, enabled: true },
+        { id: "k5",  word: "critical",        tier: "High",     default: true, enabled: true },
+        { id: "k6",  word: "time-sensitive",  tier: "High",     default: true, enabled: true },
+        { id: "k10", word: "deadline",        tier: "Medium",   default: true, enabled: true },
+        { id: "k11", word: "EOD",             tier: "Medium",   default: true, enabled: true },
+        { id: "k12", word: "end of day",      tier: "Medium",   default: true, enabled: true },
+        { id: "k13", word: "end of week",     tier: "Medium",   default: true, enabled: true },
+        { id: "k14", word: "COB",             tier: "Medium",   default: true, enabled: true },
+        { id: "k15", word: "action required", tier: "Medium",   default: true, enabled: true },
+        { id: "k16", word: "action needed",   tier: "Medium",   default: true, enabled: true },
+        { id: "k19", word: "high priority",   tier: "Medium",   default: true, enabled: true },
+        { id: "k30", word: "FYI",             tier: "Suppress", default: true, enabled: true },
+        { id: "k31", word: "no rush",         tier: "Suppress", default: true, enabled: true },
+        { id: "k32", word: "whenever you get a chance", tier: "Suppress", default: true, enabled: true },
+        { id: "k34", word: "unsubscribe",     tier: "Suppress", default: true, enabled: true },
+        { id: "k35", word: "newsletter",      tier: "Suppress", default: true, enabled: true },
+      ],
+      dueDateDefaults: { High: 1, Medium: 3, Low: 7, Suppress: 14 },
+      manualAddDefault: { dueBucket: "+7" },
+    };
+
+    /* ── Date Helpers ── */
+    function parseLocalDate(s) {
+      if (s == null) return null;
+      if (s instanceof Date) return s;
+      const parts = String(s).split("-").map(Number);
+      if (parts.length !== 3 || parts.some(isNaN)) return new Date(s);
+      return new Date(parts[0], parts[1] - 1, parts[2]);
+    }
+    function daysBetween(a, b) {
+      const msDay = 86400000;
+      const ua = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+      const ub = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+      return Math.round((ub - ua) / msDay);
+    }
+    function toISO(d) {
+      const dt = d instanceof Date ? d : parseLocalDate(d);
+      if (!dt) return "";
+      return dt.getFullYear() + "-" + String(dt.getMonth()+1).padStart(2,"0") + "-" + String(dt.getDate()).padStart(2,"0");
+    }
+    function fmtShort(s) {
+      if (!s) return "";
+      const d = parseLocalDate(s);
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    }
+    function fmtFull(s) {
+      if (!s) return "";
+      const d = parseLocalDate(s);
+      return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    }
+    function todayDate() {
+      const t = new Date(); t.setHours(0,0,0,0); return t;
+    }
+
+    /* ── Score Engine ── */
+    function calcScore(task, refDate) {
+      if (task.complete) return 0.1;
+      if (task.trashed) return 0;
+      const today = refDate || todayDate();
+      const sd = parseLocalDate(task.startDate); sd.setHours(0,0,0,0);
+      const dd = parseLocalDate(task.dueDate); dd.setHours(0,0,0,0);
+      if (task.postponeUntil) {
+        const pu = parseLocalDate(task.postponeUntil); pu.setHours(0,0,0,0);
+        if (today < pu) return 0.3;
+      }
+      if (today < sd) return 0.5;
+      const daysLeft = daysBetween(today, dd);
+      if (daysLeft <= 0) return task.peakPriority;
+      const daysTotal = daysBetween(sd, dd);
+      if (daysTotal <= 0) return task.peakPriority;
+      const elapsed = daysBetween(sd, today);
+      const cv = (elapsed / daysTotal) * (task.peakPriority - task.startPriority) + task.startPriority;
+      return Math.max(0, Math.min(10, cv));
+    }
+
+    function getStatus(task, refDate) {
+      if (task.complete) return "completed";
+      if (task.trashed) return "trashed";
+      const today = refDate || todayDate();
+      if (task.postponeUntil) {
+        const pu = parseLocalDate(task.postponeUntil); pu.setHours(0,0,0,0);
+        if (today < pu) return "snoozed";
+      }
+      const sd = parseLocalDate(task.startDate); sd.setHours(0,0,0,0);
+      if (today < sd) return "future";
+      const dd = parseLocalDate(task.dueDate); dd.setHours(0,0,0,0);
+      if (today > dd) return "overdue";
+      return "active";
+    }
+
+    function borderColor(score) {
+      if (score >= 8) return "#ef4444";
+      if (score >= 6) return "#f59e0b";
+      if (score >= 4) return "#3b82f6";
+      return "#94a3b8";
+    }
+    function scoreBg(score) {
+      if (score >= 8) return "#fef2f2";
+      if (score >= 6) return "#fffbeb";
+      if (score >= 4) return "#eff6ff";
+      return "#f1f5f9";
+    }
+    function scoreColor(score) {
+      if (score >= 8) return "#dc2626";
+      if (score >= 6) return "#d97706";
+      if (score >= 4) return "#2563eb";
+      return "#64748b";
+    }
+
+    /* ══════════════ V4 Tier Scoring ══════════════ */
+    const TIER_TO_PRIORITY = {
+      "High":     { start: 5.5, peak: 8.5 },
+      "Medium":   { start: 3.0, peak: 5.5 },
+      "Low":      { start: 1.0, peak: 3.0 },
+      "Suppress": { start: 0.0, peak: 1.0 },
+    };
+    const TIER_VALUE = { "High": 3, "Medium": 2, "Low": 1, "Suppress": 0 };
+    const TIER_COLOR = {
+      "High":     { bg: "#fee2e2", fg: "#b91c1c", border: "#fca5a5" },
+      "Medium":   { bg: "#fef3c7", fg: "#92400e", border: "#fcd34d" },
+      "Low":      { bg: "#e0e7ff", fg: "#3730a3", border: "#a5b4fc" },
+      "Suppress": { bg: "#e5e7eb", fg: "#4b5563", border: "#9ca3af" },
+    };
+
+    function valueToTier(v) {
+      if (v < 0.5) return "Suppress";
+      if (v < 1.5) return "Low";
+      if (v < 2.5) return "Medium";
+      return "High";
+    }
+
+    function combineTiers(senderTier, keywordTiers) {
+      const senderVal = senderTier != null ? TIER_VALUE[senderTier] : TIER_VALUE.Medium;
+      if (!keywordTiers || keywordTiers.length === 0) return senderTier || "Medium";
+      let strongest = keywordTiers[0];
+      let maxDev = Math.abs(TIER_VALUE[strongest] - senderVal);
+      for (const kt of keywordTiers) {
+        const dev = Math.abs(TIER_VALUE[kt] - senderVal);
+        if (dev > maxDev) { strongest = kt; maxDev = dev; }
+      }
+      const kwVal = TIER_VALUE[strongest];
+      const final = senderVal + (kwVal - senderVal) * 0.5;
+      return valueToTier(final);
+    }
+
+    function scanKeywords(text, priorities) {
+      const lower = String(text || "").toLowerCase();
+      const hits = []; const words = [];
+      for (const kw of ((priorities && priorities.keywords) || [])) {
+        if (!kw.enabled) continue;
+        if (lower.includes(String(kw.word || "").toLowerCase())) {
+          hits.push(kw.tier); words.push(kw.word);
+        }
+      }
+      return { tiers: hits, words };
+    }
+
+    function lookupSenderTier(email, priorities) {
+      if (!email) return null;
+      const lower = String(email).toLowerCase();
+      for (const p of ((priorities && priorities.people) || [])) {
+        const pEmail = String(p.email || "").toLowerCase();
+        if (!pEmail) continue;
+        if (pEmail.startsWith("*@")) {
+          const domain = pEmail.substring(2);
+          if (lower.endsWith("@" + domain)) return p.tier;
+        } else if (pEmail === lower) {
+          return p.tier;
+        }
+      }
+      return null;
+    }
+
+    function scoreNewTask({ name, senderEmail, receivedDateISO, explicitDueDate, priorities, todayISO }) {
+      const senderTier = lookupSenderTier(senderEmail, priorities);
+      const kw = scanKeywords(name, priorities);
+      const tier = combineTiers(senderTier, kw.tiers);
+      const prio = TIER_TO_PRIORITY[tier] || TIER_TO_PRIORITY.Medium;
+      const daysOut = ((priorities && priorities.dueDateDefaults) || {})[tier] ?? 7;
+      let dueDate = explicitDueDate;
+      if (!dueDate) {
+        const base = parseLocalDate(receivedDateISO || todayISO);
+        base.setDate(base.getDate() + daysOut);
+        dueDate = toISO(base);
+      }
+      return { tier, startPriority: prio.start, peakPriority: prio.peak, dueDate, matchedKeywords: kw.words, senderTier };
+    }
+
+    /* ── SVG Icons ── */
+    function ChevronIcon({ expanded }) {
+      return (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transition: "transform 0.2s", transform: expanded ? "rotate(180deg)" : "rotate(0deg)" }}><polyline points="6 9 12 15 18 9"/></svg>);
+    }
+    function ClipboardIcon({ color }) {
+      return (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>);
+    }
+    function ClockIcon({ color }) {
+      return (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>);
+    }
+    function CheckCircleIcon({ color }) {
+      return (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>);
+    }
+    function CheckIcon() {
+      return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>);
+    }
+    function SnoozeIcon() {
+      return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>);
+    }
+    function EditIcon() {
+      return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>);
+    }
+    function TrashIcon() {
+      return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>);
+    }
+    function CopyIcon() {
+      return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>);
+    }
+    function MenuIcon() {
+      return (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>);
+    }
+    function PlusIcon() {
+      return (<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>);
+    }
+    function CloseIcon() {
+      return (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>);
+    }
+    function GearIcon() {
+      return (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>);
+    }
+    function PlusSmall() {
+      return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>);
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       AUTH SCREEN
+    ══════════════════════════════════════════════════════════════ */
+    function AuthScreen({ onAuth }) {
+      const [mode, setMode]       = useState("login"); // "login" | "signup"
+      const [email, setEmail]     = useState("");
+      const [password, setPassword] = useState("");
+      const [loading, setLoading] = useState(false);
+      const [error, setError]     = useState(null);
+      const [sent, setSent]       = useState(false);
+
+      const fieldStyle = { width: "100%", padding: "14px 16px", borderRadius: "12px", border: "1px solid #e2e8f0", fontSize: "15px", fontFamily: "Inter, sans-serif", outline: "none", marginBottom: "12px", color: "#1e293b" };
+      const btnStyle   = { width: "100%", padding: "15px", borderRadius: "12px", border: "none", background: "#3b82f6", color: "#fff", fontSize: "16px", fontWeight: "700", cursor: "pointer", fontFamily: "Inter, sans-serif", marginTop: "4px" };
+
+      async function handleSubmit(e) {
+        e.preventDefault();
+        setLoading(true); setError(null);
+        const sb = getSupabase();
+        try {
+          if (mode === "signup") {
+            const { error } = await sb.auth.signUp({ email, password });
+            if (error) throw error;
+            setSent(true);
+          } else {
+            const { data, error } = await sb.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+            onAuth(data.user);
+          }
+        } catch (err) {
+          setError(err.message || "Something went wrong");
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      async function handleGoogle() {
+        const sb = getSupabase();
+        await sb.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.href } });
+      }
+
+      if (sent) {
+        return (
+          <div style={{ maxWidth: 430, margin: "0 auto", minHeight: "100vh", background: "#f8fafc", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "40px 24px" }}>
+            <div style={{ fontSize: "48px", marginBottom: "16px" }}>📬</div>
+            <div style={{ fontSize: "22px", fontWeight: "700", color: "#1e293b", marginBottom: "8px" }}>Check your email</div>
+            <div style={{ fontSize: "15px", color: "#64748b", textAlign: "center", lineHeight: 1.6 }}>We sent a confirmation link to <b>{email}</b>. Click it to activate your account, then come back and sign in.</div>
+            <button onClick={() => { setSent(false); setMode("login"); }} style={{ ...btnStyle, marginTop: "28px", background: "#f1f5f9", color: "#334155" }}>Back to sign in</button>
+          </div>
+        );
+      }
+
+      return (
+        <div style={{ maxWidth: 430, margin: "0 auto", minHeight: "100vh", background: "#f8fafc", display: "flex", flexDirection: "column", boxShadow: "0 0 40px rgba(0,0,0,0.12)" }}>
+          {/* Header */}
+          <div style={{ background: "linear-gradient(135deg, #1e293b 0%, #334155 100%)", padding: "48px 24px 36px 24px", textAlign: "center" }}>
+            <div style={{ fontSize: "32px", fontWeight: "800", color: "#fff", letterSpacing: "-0.5px" }}>Chief<span style={{ color: "#38bdf8" }}>EO</span></div>
+            <div style={{ fontSize: "14px", color: "#94a3b8", marginTop: "6px", fontWeight: "500" }}>Your tasks. Auto-prioritized.</div>
+          </div>
+
+          <div style={{ flex: 1, padding: "32px 24px" }}>
+            <div style={{ fontSize: "22px", fontWeight: "700", color: "#1e293b", marginBottom: "4px" }}>{mode === "login" ? "Welcome back" : "Create account"}</div>
+            <div style={{ fontSize: "14px", color: "#64748b", marginBottom: "24px" }}>{mode === "login" ? "Sign in to your tasks" : "Get started — it's free"}</div>
+
+            {error && (
+              <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", padding: "12px 16px", borderRadius: "10px", fontSize: "14px", marginBottom: "16px" }}>{error}</div>
+            )}
+
+            <form onSubmit={handleSubmit}>
+              <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required style={fieldStyle} />
+              <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required style={fieldStyle} />
+              <button type="submit" disabled={loading} style={{ ...btnStyle, opacity: loading ? 0.7 : 1 }}>
+                {loading ? "…" : mode === "login" ? "Sign in" : "Create account"}
+              </button>
+            </form>
+
+            <div style={{ textAlign: "center", color: "#94a3b8", fontSize: "13px", margin: "16px 0" }}>or</div>
+
+            <button onClick={handleGoogle} style={{ width: "100%", padding: "14px", borderRadius: "12px", border: "1px solid #e2e8f0", background: "#fff", color: "#1e293b", fontSize: "15px", fontWeight: "600", cursor: "pointer", fontFamily: "Inter, sans-serif", display: "flex", alignItems: "center", justifyContent: "center", gap: "10px" }}>
+              <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+              Continue with Google
+            </button>
+
+            <div style={{ textAlign: "center", marginTop: "24px", fontSize: "14px", color: "#64748b" }}>
+              {mode === "login" ? (
+                <>Don't have an account? <button onClick={() => { setMode("signup"); setError(null); }} style={{ background: "none", border: "none", color: "#3b82f6", fontWeight: "600", cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: "14px" }}>Sign up</button></>
+              ) : (
+                <>Already have an account? <button onClick={() => { setMode("login"); setError(null); }} style={{ background: "none", border: "none", color: "#3b82f6", fontWeight: "600", cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: "14px" }}>Sign in</button></>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       MAIN APP
+    ══════════════════════════════════════════════════════════════ */
+    function App() {
+      const [user, setUser]             = useState(null);
+      const [authChecked, setAuthChecked] = useState(false);
+
+      // ── Auth bootstrap ──────────────────────────────────────────
+      useEffect(() => {
+        const sb = getSupabase();
+        sb.auth.getSession().then(({ data }) => {
+          setUser(data.session?.user ?? null);
+          setAuthChecked(true);
+        });
+        const { data: { subscription } } = sb.auth.onAuthStateChange((_event, session) => {
+          setUser(session?.user ?? null);
+        });
+        return () => subscription.unsubscribe();
+      }, []);
+
+      if (!authChecked) {
+        return (
+          <div style={{ maxWidth: 430, margin: "0 auto", minHeight: "100vh", background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ color: "#94a3b8", fontSize: "14px" }}>Loading…</div>
+          </div>
+        );
+      }
+
+      if (!user) return <AuthScreen onAuth={setUser} />;
+      return <TaskApp user={user} onSignOut={() => { getSupabase().auth.signOut(); }} />;
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       TASK APP  (shown after auth)
+    ══════════════════════════════════════════════════════════════ */
+    function TaskApp({ user, onSignOut }) {
+      const [tasks, setTasks]           = useState([]);
+      const [loading, setLoading]       = useState(true);
+      const [syncStatus, setSyncStatus] = useState("idle"); // idle | saving | saved | error
+      const [syncError, setSyncError]   = useState(null);
+
+      const [tab, setTab]               = useState("active");
+      const [expandedId, setExpandedId] = useState(null);
+      const [snoozeTarget, setSnoozeTarget] = useState(null);
+      const [editTarget, setEditTarget] = useState(null);
+      const [menuOpen, setMenuOpen]     = useState(false);
+      const [showAddForm, setShowAddForm] = useState(false);
+      const [toast, setToast]           = useState(null);
+      const [viewDate, setViewDate]     = useState(null);
+      const [showDatePicker, setShowDatePicker] = useState(false);
+      const [summaryFilter, setSummaryFilter]   = useState(null);
+
+      const [priorities, setPriorities]           = useState(DEFAULT_PRIORITIES);
+      const [showPrioritiesPage, setShowPrioritiesPage] = useState(false);
+      const [newKwWord, setNewKwWord]             = useState("");
+      const [newKwTier, setNewKwTier]             = useState("Medium");
+      const [lastRemoved, setLastRemoved]         = useState(null);
+      const prioritiesSaveTimerRef                = useRef(null);
+      const suppressPrioritiesSaveRef             = useRef(true);
+
+      const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
+
+      // ── Load tasks from Supabase on mount ──────────────────────
+      useEffect(() => {
+        (async () => {
+          try {
+            const loaded = await dbLoadTasks(user.id);
+            setTasks(loaded);
+          } catch (e) {
+            showToast("Failed to load tasks");
+            console.error(e);
+          } finally {
+            setLoading(false);
+          }
+        })();
+      }, [user.id]);
+
+      // ── Load priorities from Supabase on mount ─────────────────
+      useEffect(() => {
+        (async () => {
+          try {
+            const config = await dbLoadPriorities(user.id);
+            if (config) {
+              suppressPrioritiesSaveRef.current = true;
+              setPriorities(config);
+            }
+          } catch (e) {
+            console.error("Priorities load failed:", e);
+          }
+        })();
+      }, [user.id]);
+
+      // ── Auto-save priorities when they change ──────────────────
+      useEffect(() => {
+        if (suppressPrioritiesSaveRef.current) { suppressPrioritiesSaveRef.current = false; return; }
+        if (prioritiesSaveTimerRef.current) clearTimeout(prioritiesSaveTimerRef.current);
+        prioritiesSaveTimerRef.current = setTimeout(async () => {
+          try {
+            await dbSavePriorities(priorities, user.id);
+          } catch (e) {
+            console.error("Priorities save failed:", e);
+          }
+        }, 800);
+        return () => { if (prioritiesSaveTimerRef.current) clearTimeout(prioritiesSaveTimerRef.current); };
+      }, [priorities, user.id]);
+
+      // ── Task mutators (optimistic + async persist) ─────────────
+      const updateTask = useCallback(async (id, changes) => {
+        // Optimistic update
+        setTasks(prev => prev.map(t => t.id === id ? { ...t, ...changes } : t));
+        setSyncStatus("saving");
+        try {
+          await dbUpdateTask(id, changes, user.id);
+          setSyncStatus("saved");
+          setTimeout(() => setSyncStatus(s => s === "saved" ? "idle" : s), 1500);
+        } catch (e) {
+          setSyncStatus("error");
+          setSyncError(e.message);
+          showToast("Save failed — check connection");
+          console.error(e);
+        }
+      }, [user.id]);
+
+      const handleQuickAdd = useCallback(async (name, tier, dueDate) => {
+        if (!name.trim()) return;
+        const td = toISO(effectiveToday);
+        const prio = TIER_TO_PRIORITY[tier] || TIER_TO_PRIORITY.Medium;
+        const finalDue = dueDate || (() => {
+          const daysOut = ((priorities && priorities.dueDateDefaults) || {})[tier] ?? 7;
+          const base = parseLocalDate(td); base.setDate(base.getDate() + daysOut);
+          return toISO(base);
+        })();
+        const newTask = {
+          name: name.trim(),
+          startDate: td,
+          dueDate: finalDue,
+          startPriority: prio.start,
+          peakPriority: prio.peak,
+          postponeUntil: null,
+          complete: false,
+          trashed: false,
+        };
+        setShowAddForm(false);
+        setSyncStatus("saving");
+        try {
+          const inserted = await dbInsertTask(newTask, user.id);
+          setTasks(prev => [inserted, ...prev]);
+          setSyncStatus("saved");
+          setTimeout(() => setSyncStatus(s => s === "saved" ? "idle" : s), 1500);
+          showToast("Task added · " + tier);
+        } catch (e) {
+          setSyncStatus("error");
+          setSyncError(e.message);
+          showToast("Add failed — check connection");
+          console.error(e);
+        }
+      }, [user.id, priorities]);
+
+      /* ── V4 Priorities mutators ── */
+      const addPerson = () => {
+        setPriorities(prev => ({ ...prev, people: [...(prev.people || []), { id: "p" + Date.now(), name: "", email: "", tier: "Medium" }] }));
+      };
+      const updatePerson = (id, changes) => {
+        setPriorities(prev => ({ ...prev, people: (prev.people || []).map(p => p.id === id ? { ...p, ...changes } : p) }));
+      };
+      const removePerson = (id) => {
+        setPriorities(prev => {
+          const victim = (prev.people || []).find(p => p.id === id);
+          if (victim) setLastRemoved({ type: "person", label: victim.name || victim.email || "(unnamed)", snapshot: prev });
+          return { ...prev, people: (prev.people || []).filter(p => p.id !== id) };
+        });
+      };
+      const toggleKeyword = (id) => {
+        setPriorities(prev => ({ ...prev, keywords: (prev.keywords || []).map(k => k.id === id ? { ...k, enabled: !k.enabled } : k) }));
+      };
+      const addCustomKeyword = (word, tier) => {
+        if (!word || !word.trim()) return;
+        setPriorities(prev => ({ ...prev, keywords: [...(prev.keywords || []), { id: "k" + Date.now(), word: word.trim(), tier, default: false, enabled: true }] }));
+      };
+      const removeKeyword = (id) => {
+        setPriorities(prev => {
+          const victim = (prev.keywords || []).find(k => k.id === id);
+          if (victim) setLastRemoved({ type: "keyword", label: victim.word || "(blank)", snapshot: prev });
+          return { ...prev, keywords: (prev.keywords || []).filter(k => k.id !== id) };
+        });
+      };
+      const setDueDefault = (tier, days) => {
+        setPriorities(prev => ({ ...prev, dueDateDefaults: { ...(prev.dueDateDefaults || {}), [tier]: Math.max(0, parseInt(days, 10) || 0) } }));
+      };
+
+      const realToday = todayDate();
+      const effectiveToday = useMemo(() => {
+        if (!viewDate) return realToday;
+        const d = parseLocalDate(viewDate); d.setHours(0,0,0,0); return d;
+      }, [viewDate]);
+      const isTimeTraveling = viewDate !== null && effectiveToday.getTime() !== realToday.getTime();
+      const today = effectiveToday;
+
+      const rescoreAllTasks = () => {
+        const td = toISO(today);
+        setTasks(prev => prev.map(t => {
+          if (t.complete || t.trashed) return t;
+          const r = scoreNewTask({ name: t.name, senderEmail: null, receivedDateISO: t.startDate, explicitDueDate: t.dueDate, priorities, todayISO: td });
+          return { ...t, startPriority: r.startPriority, peakPriority: r.peakPriority };
+        }));
+        showToast("Re-scored all active tasks");
+      };
+
+      const scored = useMemo(() =>
+        tasks.map(t => ({ ...t, _score: calcScore(t, effectiveToday), _status: getStatus(t, effectiveToday) })),
+        [tasks, effectiveToday]
+      );
+
+      const activeTasks   = useMemo(() => scored.filter(t => !t.complete && !t.trashed && t._status !== "snoozed").sort((a, b) => b._score - a._score), [scored]);
+      const snoozedTasks  = useMemo(() => scored.filter(t => !t.complete && !t.trashed && t._status === "snoozed").sort((a, b) => parseLocalDate(a.postponeUntil) - parseLocalDate(b.postponeUntil)), [scored]);
+      const doneTasks     = useMemo(() => scored.filter(t => t.complete && !t.trashed).sort((a, b) => b.id - a.id), [scored]);
+
+      const overdueCount  = activeTasks.filter(t => t._status === "overdue").length;
+      const dueTodayCount = activeTasks.filter(t => { const dd = parseLocalDate(t.dueDate); dd.setHours(0,0,0,0); return dd.getTime() === today.getTime(); }).length;
+      const thisWeekCount = activeTasks.filter(t => { const dd = parseLocalDate(t.dueDate); dd.setHours(0,0,0,0); const diff = daysBetween(today, dd); return diff >= 0 && diff <= 7; }).length;
+
+      const filteredActiveTasks = useMemo(() => {
+        if (!summaryFilter) return activeTasks;
+        return activeTasks.filter(t => {
+          const dd = parseLocalDate(t.dueDate); dd.setHours(0,0,0,0);
+          const diff = daysBetween(today, dd);
+          if (summaryFilter === "overdue")  return t._status === "overdue";
+          if (summaryFilter === "dueToday") return dd.getTime() === today.getTime();
+          if (summaryFilter === "thisWeek") return diff >= 0 && diff <= 7;
+          return true;
+        });
+      }, [activeTasks, summaryFilter, today]);
+
+      const filterLabel = summaryFilter === "overdue" ? "Overdue" : summaryFilter === "dueToday" ? "Due Today" : summaryFilter === "thisWeek" ? "This Week" : null;
+      const filterCount = summaryFilter === "overdue" ? overdueCount : summaryFilter === "dueToday" ? dueTodayCount : summaryFilter === "thisWeek" ? thisWeekCount : 0;
+      const toggleFilter = (f) => setSummaryFilter(prev => prev === f ? null : f);
+
+      const toggleExpand = (id) => { setExpandedId(prev => prev === id ? null : id); setEditTarget(null); setSnoozeTarget(null); };
+
+      /* ── Styles ── */
+      const S = {
+        app: { minHeight: "100vh", background: "#f8fafc", display: "flex", flexDirection: "column", position: "relative" },
+        header: { background: "linear-gradient(135deg, #1e293b 0%, #334155 100%)", padding: "16px 20px 0 20px", position: "relative" },
+        headerTop: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" },
+        title: { fontSize: "22px", fontWeight: "700", color: "#fff", letterSpacing: "-0.3px" },
+        subtitle: { fontSize: "12px", color: "#94a3b8", fontWeight: "500", marginTop: "1px" },
+        dateBadge: { background: "rgba(255,255,255,0.15)", borderRadius: "10px", padding: "6px 12px", display: "flex", flexDirection: "column", alignItems: "center" },
+        dateMonth: { fontSize: "10px", color: "#94a3b8", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.5px" },
+        dateDay: { fontSize: "18px", color: "#fff", fontWeight: "700", lineHeight: "1.1" },
+        cards: { display: "flex", gap: "8px", padding: "14px 0 16px 0" },
+        summaryCard: (bg, isActive, isDimmed) => ({ flex: 1, background: bg, borderRadius: "12px", padding: "10px 12px", textAlign: "center", cursor: "pointer", transition: "all 0.15s ease", userSelect: "none", border: isActive ? "2px solid" : "2px solid transparent", borderColor: isActive ? (bg === "#fef2f2" ? "#ef4444" : bg === "#fffbeb" ? "#f59e0b" : "#3b82f6") : "transparent", transform: isActive ? "scale(0.96)" : "scale(1)", opacity: isDimmed ? 0.45 : 1, boxShadow: isActive ? "inset 0 2px 6px rgba(0,0,0,0.08)" : "none" }),
+        summaryCount: (color) => ({ fontSize: "22px", fontWeight: "700", color, lineHeight: "1.2" }),
+        summaryLabel: { fontSize: "11px", color: "#64748b", fontWeight: "500", marginTop: "2px" },
+        list: { flex: 1, overflowY: "auto", padding: "8px 16px", paddingBottom: "140px" },
+        taskCard: (score, status) => ({ background: status === "overdue" ? "rgba(239,68,68,0.04)" : "#fff", borderRadius: "14px", borderLeft: "4px solid " + (status === "snoozed" ? "#c4b5fd" : status === "completed" ? "#86efac" : borderColor(score)), boxShadow: "0 1px 3px rgba(0,0,0,0.06)", outline: status === "overdue" ? "1px solid rgba(239,68,68,0.15)" : "none", marginBottom: "8px", opacity: status === "snoozed" ? 0.7 : 1, transition: "all 0.15s ease", cursor: "pointer" }),
+        cardInner: { display: "flex", alignItems: "center", padding: "14px 14px 14px 12px", gap: "12px" },
+        scoreBadge: (score) => ({ width: "36px", height: "36px", borderRadius: "10px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: scoreBg(score), fontSize: "14px", fontWeight: "700", color: scoreColor(score) }),
+        taskName: (done) => ({ fontSize: "15px", fontWeight: "500", color: done ? "#94a3b8" : "#1e293b", flex: 1, lineHeight: "1.3", textDecoration: done ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }),
+        dueLabel: (status) => ({ fontSize: "11px", fontWeight: "600", color: status === "overdue" ? "#ef4444" : status === "active" ? "#f59e0b" : "#94a3b8", marginTop: "3px" }),
+        snoozeBadge: { display: "inline-block", fontSize: "10px", fontWeight: "600", color: "#a78bfa", background: "#f5f3ff", borderRadius: "6px", padding: "2px 7px", marginTop: "4px" },
+        expandArea: { padding: "0 14px 14px 14px", borderTop: "1px solid #f1f5f9" },
+        detailGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "14px", marginTop: "12px" },
+        detailLabel: { fontSize: "11px", color: "#94a3b8", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.3px" },
+        detailValue: { fontSize: "13px", color: "#334155", fontWeight: "500", marginTop: "2px" },
+        actionRow: { display: "flex", gap: "8px" },
+        actionBtn: (bg, color) => ({ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "4px", padding: "10px 6px", borderRadius: "10px", border: "none", background: bg, color, fontSize: "11px", fontWeight: "600", cursor: "pointer" }),
+        tabBar: { position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: "430px", background: "#fff", borderTop: "1px solid #e2e8f0", display: "flex", paddingBottom: "22px", zIndex: 100 },
+        tabItem: (active) => ({ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "3px", padding: "10px 0 4px 0", background: "none", border: "none", cursor: "pointer", color: active ? "#3b82f6" : "#94a3b8", fontSize: "11px", fontWeight: "600" }),
+        quickAddBar: { position: "fixed", bottom: "73px", left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: "430px", background: "#fff", padding: "8px 16px", display: "flex", gap: "10px", alignItems: "center", borderTop: "1px solid #f1f5f9", zIndex: 99 },
+        quickBtn: { width: "46px", height: "46px", borderRadius: "12px", background: "#3b82f6", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 8px rgba(59,130,246,0.35)", flexShrink: 0 },
+        overlay: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.3)", zIndex: 200, display: "flex", alignItems: "flex-end", justifyContent: "center" },
+        modal: { background: "#fff", borderRadius: "20px 20px 0 0", width: "100%", maxWidth: "430px", padding: "24px 20px 40px 20px" },
+        menuDrop: { position: "absolute", top: "50px", right: "20px", background: "#fff", borderRadius: "12px", boxShadow: "0 4px 20px rgba(0,0,0,0.15)", padding: "6px", zIndex: 150, minWidth: "200px" },
+        menuItem: { display: "block", width: "100%", padding: "10px 14px", border: "none", background: "none", textAlign: "left", fontSize: "14px", color: "#334155", cursor: "pointer", borderRadius: "8px", fontFamily: "Inter, sans-serif" },
+        toast: { position: "fixed", top: "80px", left: "50%", transform: "translateX(-50%)", background: "#334155", color: "#fff", padding: "10px 20px", borderRadius: "10px", fontSize: "14px", fontWeight: "500", zIndex: 300, boxShadow: "0 4px 12px rgba(0,0,0,0.2)" },
+      };
+
+      const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+      /* ── Task Card ── */
+      const TaskCard = ({ task }) => {
+        const score = task._score;
+        const status = task._status;
+        const isExpanded = expandedId === task.id;
+        const isOverdue = status === "overdue";
+        const dd = parseLocalDate(task.dueDate); dd.setHours(0,0,0,0);
+        const daysLeft = daysBetween(today, dd);
+
+        let dueText = ""; let dueStatus = "gray";
+        if (task.complete) { dueText = "Completed"; dueStatus = "completed"; }
+        else if (status === "snoozed") { dueText = ""; }
+        else if (isOverdue) { dueText = "OVERDUE " + Math.abs(daysLeft) + "d"; dueStatus = "overdue"; }
+        else if (daysLeft === 0) { dueText = "Due today"; dueStatus = "overdue"; }
+        else if (daysLeft <= 7) { dueText = daysLeft + "d left"; dueStatus = "active"; }
+        else { dueText = daysLeft + "d left"; dueStatus = "gray"; }
+
+        const fallbackCopy = (text) => {
+          const ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.top = "0"; ta.style.left = "0"; ta.style.opacity = "0";
+          document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+          let ok = false; try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+          document.body.removeChild(ta); return ok;
+        };
+
+        return (
+          <div style={S.taskCard(score, status)}>
+            <div style={S.cardInner} onClick={() => toggleExpand(task.id)}>
+              {task.complete ? (
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f0fdf4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#22c55e" }}><CheckIcon /></div>
+              ) : (
+                <div style={S.scoreBadge(score)}>{score.toFixed(1)}</div>
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={S.taskName(task.complete)}>{task.name}</div>
+                {dueText && <div style={S.dueLabel(dueStatus)}>{dueText}</div>}
+                {status === "snoozed" && task.postponeUntil && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
+                {status !== "snoozed" && task.postponeUntil && !task.complete && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
+              </div>
+              <ChevronIcon expanded={isExpanded} />
+            </div>
+            {isExpanded && (
+              <div style={S.expandArea}>
+                {editTarget === task.id ? (
+                  <EditForm task={task} onSave={(changes) => { updateTask(task.id, changes); setEditTarget(null); showToast("Saved"); }} onCancel={() => setEditTarget(null)} />
+                ) : (
+                  <React.Fragment>
+                    <div style={S.detailGrid}>
+                      <div><div style={S.detailLabel}>Start Date</div><div style={S.detailValue}>{fmtFull(task.startDate)}</div></div>
+                      <div><div style={S.detailLabel}>Due Date</div><div style={S.detailValue}>{fmtFull(task.dueDate)}</div></div>
+                      <div><div style={S.detailLabel}>Start Priority</div><div style={S.detailValue}>{task.startPriority.toFixed(1)}</div></div>
+                      <div><div style={S.detailLabel}>Peak Priority</div><div style={S.detailValue}>{task.peakPriority.toFixed(1)}</div></div>
+                    </div>
+                    <div style={S.actionRow}>
+                      <button style={S.actionBtn("#f0fdf4", "#22c55e")} onClick={(e) => { e.stopPropagation(); updateTask(task.id, { complete: true }); setExpandedId(null); showToast("Done!"); }}><CheckIcon /> Done</button>
+                      <button style={S.actionBtn("#f5f3ff", "#a78bfa")} onClick={(e) => { e.stopPropagation(); setSnoozeTarget(task.id); }}><SnoozeIcon /> Snooze</button>
+                      <button style={S.actionBtn("#eff6ff", "#3b82f6")} onClick={(e) => { e.stopPropagation(); setEditTarget(task.id); }}><EditIcon /> Edit</button>
+                      <button style={S.actionBtn("#fffbeb", "#d97706")} title="Copy task name" onClick={async (e) => { e.stopPropagation(); const text = task.name || ""; try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); showToast("Name copied"); } else if (fallbackCopy(text)) { showToast("Name copied"); } else { showToast("Copy failed"); } } catch (err) { fallbackCopy(text) ? showToast("Name copied") : showToast("Copy failed"); } }}><CopyIcon /> Copy</button>
+                      <button style={S.actionBtn("#fef2f2", "#ef4444")} onClick={(e) => { e.stopPropagation(); updateTask(task.id, { trashed: true }); setExpandedId(null); showToast("Trashed"); }}><TrashIcon /> Trash</button>
+                    </div>
+                  </React.Fragment>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      /* ── Edit Form ── */
+      function EditForm({ task, onSave, onCancel }) {
+        const [name, setName]         = useState(task.name);
+        const [startDate, setStartDate] = useState(toISO(task.startDate));
+        const [dueDate, setDueDate]   = useState(toISO(task.dueDate));
+        const [sp, setSp]             = useState(task.startPriority);
+        const [pp, setPp]             = useState(task.peakPriority);
+        const [postpone, setPostpone] = useState(task.postponeUntil ? toISO(task.postponeUntil) : "");
+        const fieldStyle = { width: "100%", padding: "10px 12px", borderRadius: "10px", border: "1px solid #e2e8f0", fontSize: "14px", fontFamily: "Inter, sans-serif", outline: "none", marginTop: "4px" };
+        const labelStyle = { fontSize: "12px", color: "#64748b", fontWeight: "600", display: "block", marginTop: "12px" };
+        return (
+          <div style={{ padding: "8px 0" }} onClick={(e) => e.stopPropagation()}>
+            <label style={labelStyle}>Task Name</label>
+            <input style={fieldStyle} value={name} onChange={e => setName(e.target.value)} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+              <div><label style={labelStyle}>Start Date</label><input type="date" style={fieldStyle} value={startDate} onChange={e => setStartDate(e.target.value)} /></div>
+              <div><label style={labelStyle}>Due Date</label><input type="date" style={fieldStyle} value={dueDate} onChange={e => setDueDate(e.target.value)} /></div>
+            </div>
+            <label style={labelStyle}>Start Priority: {sp.toFixed(1)}</label>
+            <input type="range" min="0" max="10" step="0.5" value={sp} onChange={e => setSp(parseFloat(e.target.value))} style={{ marginTop: "6px" }} />
+            <label style={labelStyle}>Peak Priority: {pp.toFixed(1)}</label>
+            <input type="range" min="0" max="10" step="0.5" value={pp} onChange={e => setPp(parseFloat(e.target.value))} style={{ marginTop: "6px" }} />
+            <label style={labelStyle}>Postpone Until</label>
+            <input type="date" style={fieldStyle} value={postpone} onChange={e => setPostpone(e.target.value)} />
+            <div style={{ display: "flex", gap: "10px", marginTop: "16px" }}>
+              <button onClick={onCancel} style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "1px solid #e2e8f0", background: "#fff", fontSize: "14px", fontWeight: "600", color: "#64748b", cursor: "pointer", fontFamily: "Inter" }}>Cancel</button>
+              <button onClick={() => onSave({ name, startDate, dueDate, startPriority: sp, peakPriority: pp, postponeUntil: postpone || null })} style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "none", background: "#3b82f6", fontSize: "14px", fontWeight: "600", color: "#fff", cursor: "pointer", fontFamily: "Inter" }}>Save</button>
+            </div>
+          </div>
+        );
+      }
+
+      /* ── Snooze Modal ── */
+      const SnoozeModal = () => {
+        const [sDate, setSDate] = useState("");
+        if (snoozeTarget == null) return null;
+        const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowISO = toISO(tomorrow);
+        const tomorrowLabel = tomorrow.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+        const doSnooze = (date) => { updateTask(snoozeTarget, { postponeUntil: date }); setSnoozeTarget(null); setExpandedId(null); showToast("Snoozed"); };
+        return (
+          <div style={S.overlay} onClick={() => setSnoozeTarget(null)}>
+            <div style={S.modal} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: "18px", fontWeight: "700", color: "#1e293b", marginBottom: "4px" }}>Snooze Task</div>
+              <div style={{ fontSize: "14px", color: "#64748b", marginBottom: "16px" }}>Pick a date to postpone this task until:</div>
+              <button onClick={() => doSnooze(tomorrowISO)} style={{ width: "100%", padding: "16px", borderRadius: "14px", border: "2px solid #a78bfa", background: "linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%)", cursor: "pointer", marginBottom: "14px", display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", fontFamily: "Inter, sans-serif" }}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                <span style={{ fontSize: "16px", fontWeight: "700", color: "#7c3aed" }}>Tomorrow</span>
+                <span style={{ fontSize: "13px", color: "#8b5cf6", fontWeight: "500" }}>{tomorrowLabel}</span>
+              </button>
+              <div style={{ fontSize: "12px", color: "#94a3b8", textAlign: "center", marginBottom: "10px", fontWeight: "500" }}>or pick a specific date</div>
+              <input type="date" value={sDate} onChange={e => setSDate(e.target.value)} style={{ width: "100%", padding: "14px 16px", borderRadius: "12px", border: "1px solid #e2e8f0", fontSize: "16px", fontFamily: "Inter, sans-serif", outline: "none" }} />
+              <div style={{ display: "flex", gap: "10px", marginTop: "18px" }}>
+                <button onClick={() => setSnoozeTarget(null)} style={{ flex: 1, padding: "14px", borderRadius: "12px", border: "1px solid #e2e8f0", background: "#fff", fontSize: "15px", fontWeight: "600", color: "#64748b", cursor: "pointer", fontFamily: "Inter" }}>Cancel</button>
+                <button onClick={() => { if (!sDate) return; doSnooze(sDate); }} style={{ flex: 1, padding: "14px", borderRadius: "12px", border: "none", background: "#a78bfa", fontSize: "15px", fontWeight: "600", color: "#fff", cursor: "pointer", fontFamily: "Inter" }}>Snooze</button>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      /* ── Quick Add Modal ── */
+      const QuickAddModal = () => {
+        const [qaName, setQaName]               = useState("");
+        const [qaTierOverride, setQaTierOverride] = useState(null);
+        const [qaDueOverride, setQaDueOverride]   = useState(null);
+        if (!showAddForm) return null;
+        const autoScored = scoreNewTask({ name: qaName, senderEmail: null, receivedDateISO: toISO(today), explicitDueDate: null, priorities, todayISO: toISO(today) });
+        const effectiveTier = qaTierOverride || autoScored.tier;
+        const effectiveDue = qaDueOverride || (() => { const daysOut = ((priorities && priorities.dueDateDefaults) || {})[effectiveTier] ?? 7; const base = new Date(today); base.setDate(base.getDate() + daysOut); return toISO(base); })();
+        const fieldStyle = { width: "100%", padding: "12px 14px", borderRadius: "10px", border: "1px solid #e2e8f0", fontSize: "15px", fontFamily: "Inter, sans-serif", outline: "none" };
+        const tierColors = TIER_COLOR[effectiveTier];
+        return (
+          <div style={S.overlay} onClick={() => setShowAddForm(false)}>
+            <div style={S.modal} onClick={e => e.stopPropagation()}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                <div style={{ fontSize: "18px", fontWeight: "700", color: "#1e293b" }}>Add Task</div>
+                <button onClick={() => setShowAddForm(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: "4px" }}><CloseIcon /></button>
+              </div>
+              <input style={{ ...fieldStyle, marginBottom: "14px" }} placeholder="What needs to be done?" value={qaName} onChange={e => setQaName(e.target.value)} autoFocus />
+              <div style={{ marginBottom: "14px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "6px" }}>
+                  <div style={{ fontSize: "12px", color: "#64748b", fontWeight: "600" }}>Priority</div>
+                  {autoScored.matchedKeywords && autoScored.matchedKeywords.length > 0 && !qaTierOverride && (
+                    <div style={{ fontSize: "10px", color: "#94a3b8", fontWeight: "500" }}>matched: {autoScored.matchedKeywords.slice(0, 2).join(", ")}</div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: "6px" }}>
+                  {["High", "Medium", "Low", "Suppress"].map(tier => {
+                    const active = tier === effectiveTier; const tc = TIER_COLOR[tier];
+                    return (<button key={tier} onClick={() => setQaTierOverride(tier === autoScored.tier ? null : tier)} style={{ flex: 1, padding: "9px 4px", borderRadius: "10px", border: active ? "2px solid " + tc.border : "1px solid #e2e8f0", background: active ? tc.bg : "#fff", color: active ? tc.fg : "#64748b", fontSize: "12px", fontWeight: active ? "700" : "500", cursor: "pointer", fontFamily: "Inter, sans-serif" }}>{tier}</button>);
+                  })}
+                </div>
+                {!qaTierOverride && <div style={{ fontSize: "10px", color: "#94a3b8", marginTop: "5px", fontStyle: "italic" }}>Auto-detected from keywords · tap to override</div>}
+              </div>
+              <div style={{ marginBottom: "18px" }}>
+                <div style={{ fontSize: "12px", color: "#64748b", fontWeight: "600", marginBottom: "6px" }}>Due Date</div>
+                <input type="date" style={fieldStyle} value={effectiveDue} onChange={e => setQaDueOverride(e.target.value)} />
+              </div>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button onClick={() => setShowAddForm(false)} style={{ flex: 1, padding: "14px", borderRadius: "12px", border: "1px solid #e2e8f0", background: "#fff", fontSize: "15px", fontWeight: "600", color: "#64748b", cursor: "pointer", fontFamily: "Inter" }}>Cancel</button>
+                <button onClick={() => handleQuickAdd(qaName, effectiveTier, effectiveDue)} style={{ flex: 1, padding: "14px", borderRadius: "12px", border: "none", background: "#3b82f6", fontSize: "15px", fontWeight: "600", color: "#fff", cursor: "pointer", fontFamily: "Inter" }}>Add Task</button>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      const currentList = tab === "active" ? filteredActiveTasks : tab === "snoozed" ? snoozedTasks : doneTasks;
+
+      const undoLastRemoval = () => { if (!lastRemoved) return; setPriorities(lastRemoved.snapshot); setLastRemoved(null); showToast("Restored"); };
+      const dismissLastRemoval = () => setLastRemoved(null);
+
+      /* ── Priorities Page ── */
+      const PrioritiesView = () => {
+        const people = priorities.people || [];
+        const keywords = priorities.keywords || [];
+        const dueDefaults = priorities.dueDateDefaults || { High: 1, Medium: 3, Low: 7, Suppress: 14 };
+        const cardStyle = { background: "#fff", borderRadius: "14px", padding: "16px", marginBottom: "14px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" };
+        const sectionTitle = { fontSize: "15px", fontWeight: "700", color: "#1e293b", marginBottom: "4px" };
+        const sectionSub = { fontSize: "12px", color: "#64748b", marginBottom: "12px" };
+        const rowInput = { flex: 1, padding: "8px 10px", borderRadius: "8px", border: "1px solid #e2e8f0", fontSize: "13px", fontFamily: "Inter, sans-serif", outline: "none", minWidth: 0 };
+        const miniBtn = (bg, fg) => ({ background: bg, color: fg, border: "none", borderRadius: "8px", padding: "6px 10px", fontSize: "12px", fontWeight: "600", cursor: "pointer", fontFamily: "Inter, sans-serif" });
+        const tierPicker = (value, onChange, size = "sm") => (
+          <div style={{ display: "flex", gap: "4px" }}>
+            {["High", "Medium", "Low", "Suppress"].map(t => {
+              const active = t === value; const tc = TIER_COLOR[t];
+              return (<button key={t} onClick={() => onChange(t)} style={{ padding: size === "sm" ? "5px 8px" : "7px 10px", borderRadius: "7px", border: active ? "2px solid " + tc.border : "1px solid #e2e8f0", background: active ? tc.bg : "#fff", color: active ? tc.fg : "#94a3b8", fontSize: "11px", fontWeight: active ? "700" : "500", cursor: "pointer", fontFamily: "Inter, sans-serif" }}>{t[0]}</button>);
+            })}
+          </div>
+        );
+        const kwByTier = { High: [], Medium: [], Low: [], Suppress: [] };
+        keywords.forEach(k => { (kwByTier[k.tier] || kwByTier.Medium).push(k); });
+        return (
+          <div style={{ ...S.app, background: "#f1f5f9" }}>
+            <div style={{ background: "linear-gradient(135deg, #475569 0%, #334155 100%)", padding: "16px 20px 14px 20px", color: "#fff" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "2px" }}>
+                <button onClick={() => setShowPrioritiesPage(false)} style={{ background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "10px", width: "36px", height: "36px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <div>
+                  <div style={{ fontSize: "20px", fontWeight: "700" }}>Priorities</div>
+                  <div style={{ fontSize: "12px", opacity: 0.8 }}>
+                    How tasks get ranked
+                    {syncStatus === "saved" && <span style={{ color: "#86efac", marginLeft: "6px" }}>● Saved</span>}
+                    {syncStatus === "saving" && <span style={{ color: "#fbbf24", marginLeft: "6px" }}>● Saving…</span>}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: "14px" }}>
+              {lastRemoved && (
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", background: "#fef3c7", border: "1px solid #fde68a", color: "#78350f", padding: "10px 12px", borderRadius: "10px", marginBottom: "12px", fontSize: "13px" }}>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>Removed {lastRemoved.type}: <b>{lastRemoved.label}</b></span>
+                  <button onClick={undoLastRemoval} style={miniBtn("#f59e0b", "#fff")}>Undo</button>
+                  <button onClick={dismissLastRemoval} style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 6px", color: "#92400e", fontSize: "16px", fontWeight: "700", lineHeight: 1 }}>×</button>
+                </div>
+              )}
+              <div style={cardStyle}>
+                <div style={sectionTitle}>Keywords</div>
+                <div style={sectionSub}>Words/phrases that nudge ranking when found in a task name. Toggle defaults on/off — add your own anytime.</div>
+                {["High", "Medium", "Low", "Suppress"].map(tier => {
+                  const tc = TIER_COLOR[tier]; const items = kwByTier[tier];
+                  if (!items || items.length === 0) return null;
+                  return (
+                    <div key={tier} style={{ marginBottom: "10px" }}>
+                      <div style={{ fontSize: "11px", fontWeight: "700", color: tc.fg, letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: "6px" }}>{tier}</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                        {items.map(k => {
+                          const on = k.enabled !== false;
+                          return (
+                            <div key={k.id} style={{ display: "inline-flex", alignItems: "center", gap: "5px", padding: "5px 9px", borderRadius: "14px", background: on ? tc.bg : "#f1f5f9", border: "1px solid " + (on ? tc.border : "#e2e8f0"), color: on ? tc.fg : "#94a3b8", fontSize: "11px", fontWeight: on ? "600" : "500", textDecoration: on ? "none" : "line-through", cursor: "pointer" }} onClick={() => toggleKeyword(k.id)}>
+                              <span>{k.word}</span>
+                              {!k.default && <span onClick={e => { e.stopPropagation(); removeKeyword(k.id); }} style={{ cursor: "pointer", opacity: 0.6, fontWeight: "700" }}>×</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px dashed #e2e8f0", display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                  <input style={{ ...rowInput, flex: "1 1 140px" }} placeholder="Add a custom keyword…" value={newKwWord} onChange={e => setNewKwWord(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newKwWord.trim()) { addCustomKeyword(newKwWord, newKwTier); setNewKwWord(""); } }} />
+                  {tierPicker(newKwTier, setNewKwTier)}
+                  <button onClick={() => { if (newKwWord.trim()) { addCustomKeyword(newKwWord, newKwTier); setNewKwWord(""); } }} style={miniBtn("#3b82f6", "#fff")}>Add</button>
+                </div>
+              </div>
+              <div style={cardStyle}>
+                <div style={sectionTitle}>Due Date Defaults</div>
+                <div style={sectionSub}>Days out from today for each tier (when no explicit date is set).</div>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  {["High", "Medium", "Low", "Suppress"].map(tier => {
+                    const tc = TIER_COLOR[tier];
+                    return (<div key={tier} style={{ flex: "1 1 60px", minWidth: "60px", padding: "8px", borderRadius: "10px", border: "1px solid " + tc.border, background: tc.bg, textAlign: "center" }}>
+                      <div style={{ fontSize: "10px", fontWeight: "700", color: tc.fg, letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: "4px" }}>{tier}</div>
+                      <input type="number" min="0" max="365" value={dueDefaults[tier] ?? 7} onChange={e => setDueDefault(tier, e.target.value)} style={{ width: "40px", padding: "4px", borderRadius: "6px", border: "1px solid " + tc.border, fontSize: "14px", fontWeight: "700", color: tc.fg, textAlign: "center", fontFamily: "Inter, sans-serif", background: "#fff", outline: "none" }} />
+                      <div style={{ fontSize: "9px", color: tc.fg, marginTop: "2px", opacity: 0.7 }}>days out</div>
+                    </div>);
+                  })}
+                </div>
+              </div>
+              <div style={{ ...cardStyle, background: "#eff6ff", border: "1px solid #bfdbfe" }}>
+                <div style={{ fontSize: "15px", fontWeight: "700", color: "#1e40af", marginBottom: "4px" }}>How tiers combine</div>
+                <div style={{ fontSize: "12px", color: "#1e40af", lineHeight: 1.5 }}>When both sender and keyword match, the final tier is pulled <b>halfway</b> between the two — so a keyword can <b>boost or suppress</b> a sender's default by 50%.</div>
+                <div style={{ fontSize: "11px", color: "#3730a3", marginTop: "8px", fontFamily: "ui-monospace, monospace", background: "#fff", padding: "6px 8px", borderRadius: "6px" }}>final = sender + (keyword − sender) × 0.5</div>
+              </div>
+              <div style={cardStyle}>
+                <div style={sectionTitle}>Account</div>
+                <div style={{ fontSize: "13px", color: "#64748b", marginBottom: "12px" }}>Signed in as <b>{user.email}</b></div>
+                <button onClick={onSignOut} style={{ background: "#fef2f2", color: "#b91c1c", border: "none", borderRadius: "8px", padding: "8px 14px", fontSize: "13px", fontWeight: "600", cursor: "pointer", fontFamily: "Inter" }}>Sign out</button>
+              </div>
+              <div style={{ height: "20px" }}></div>
+            </div>
+          </div>
+        );
+      };
+
+      if (showPrioritiesPage) return PrioritiesView();
+
+      return (
+        <div style={S.app}>
+          <div style={S.header}>
+            <div style={S.headerTop}>
+              <div>
+                <div style={S.title}>ChiefEO</div>
+                <div style={S.subtitle}>
+                  {user.email}
+                  {syncStatus === "saving" && <span style={{ color: "#f59e0b", marginLeft: "8px" }}>● Saving…</span>}
+                  {syncStatus === "saved"  && <span style={{ color: "#10b981", marginLeft: "8px" }}>● Saved</span>}
+                  {syncStatus === "error"  && <span style={{ color: "#f87171", marginLeft: "8px" }}>● Sync error</span>}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ ...S.dateBadge, ...(isTimeTraveling ? { background: "rgba(245,158,11,0.35)", border: "2px solid #f59e0b" } : {}), cursor: "pointer", position: "relative" }} onClick={() => setShowDatePicker(true)}>
+                  <span style={{ ...S.dateMonth, ...(isTimeTraveling ? { color: "#fbbf24" } : {}) }}>{months[effectiveToday.getMonth()]}</span>
+                  <span style={S.dateDay}>{effectiveToday.getDate()}</span>
+                  {isTimeTraveling && <span style={{ fontSize: "8px", color: "#fbbf24", fontWeight: "700", letterSpacing: "0.3px" }}>TIME TRAVEL</span>}
+                </div>
+                <button onClick={() => setShowPrioritiesPage(true)} title="Priorities settings" style={{ background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "10px", width: "36px", height: "36px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><GearIcon /></button>
+                <button onClick={() => setMenuOpen(!menuOpen)} style={{ background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "10px", width: "36px", height: "36px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><MenuIcon /></button>
+              </div>
+            </div>
+            {menuOpen && (
+              <div style={S.menuDrop}>
+                <button style={S.menuItem} onMouseOver={e => e.target.style.background="#f1f5f9"} onMouseOut={e => e.target.style.background="none"} onClick={() => { setShowPrioritiesPage(true); setMenuOpen(false); }}>Priorities settings…</button>
+                <button style={S.menuItem} onMouseOver={e => e.target.style.background="#f1f5f9"} onMouseOut={e => e.target.style.background="none"} onClick={() => { rescoreAllTasks(); setMenuOpen(false); }}>Re-score all active tasks</button>
+                <div style={{ height: "1px", background: "#e2e8f0", margin: "4px 0" }}></div>
+                <button style={S.menuItem} onMouseOver={e => e.target.style.background="#f1f5f9"} onMouseOut={e => e.target.style.background="none"} onClick={() => { onSignOut(); setMenuOpen(false); }}>Sign out</button>
+              </div>
+            )}
+            {isTimeTraveling && (
+              <div style={{ background: "linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)", borderRadius: "12px", padding: "10px 14px", marginBottom: "10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#78350f" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  <span style={{ fontSize: "13px", fontWeight: "700", color: "#78350f" }}>Viewing as of {effectiveToday.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</span>
+                </div>
+                <button onClick={() => setViewDate(null)} style={{ background: "#78350f", color: "#fef3c7", border: "none", borderRadius: "8px", padding: "6px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", fontFamily: "Inter", whiteSpace: "nowrap" }}>Back to Today</button>
+              </div>
+            )}
+            <div style={S.cards}>
+              <div style={S.summaryCard("#fef2f2", summaryFilter === "overdue", summaryFilter && summaryFilter !== "overdue")} onClick={() => { toggleFilter("overdue"); if (tab !== "active") { setTab("active"); setExpandedId(null); setEditTarget(null); } }}>
+                <div style={S.summaryCount("#ef4444")}>{overdueCount}</div>
+                <div style={S.summaryLabel}>Overdue</div>
+                {summaryFilter === "overdue" && <div style={{ fontSize: "9px", color: "#ef4444", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
+              </div>
+              <div style={S.summaryCard("#fffbeb", summaryFilter === "dueToday", summaryFilter && summaryFilter !== "dueToday")} onClick={() => { toggleFilter("dueToday"); if (tab !== "active") { setTab("active"); setExpandedId(null); setEditTarget(null); } }}>
+                <div style={S.summaryCount("#f59e0b")}>{dueTodayCount}</div>
+                <div style={S.summaryLabel}>Due Today</div>
+                {summaryFilter === "dueToday" && <div style={{ fontSize: "9px", color: "#f59e0b", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
+              </div>
+              <div style={S.summaryCard("#eff6ff", summaryFilter === "thisWeek", summaryFilter && summaryFilter !== "thisWeek")} onClick={() => { toggleFilter("thisWeek"); if (tab !== "active") { setTab("active"); setExpandedId(null); setEditTarget(null); } }}>
+                <div style={S.summaryCount("#3b82f6")}>{thisWeekCount}</div>
+                <div style={S.summaryLabel}>This Week</div>
+                {summaryFilter === "thisWeek" && <div style={{ fontSize: "9px", color: "#3b82f6", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
+              </div>
+            </div>
+          </div>
+
+          {summaryFilter && tab === "active" && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 20px 0 20px", background: "#f8fafc" }}>
+              <div style={{ fontSize: "13px", fontWeight: "600", color: "#475569" }}>Showing: <span style={{ color: summaryFilter === "overdue" ? "#ef4444" : summaryFilter === "dueToday" ? "#f59e0b" : "#3b82f6" }}>{filterLabel} ({filterCount})</span></div>
+              <button onClick={() => setSummaryFilter(null)} style={{ background: "#e2e8f0", border: "none", borderRadius: "8px", padding: "4px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", cursor: "pointer", fontFamily: "Inter, sans-serif", display: "flex", alignItems: "center", gap: "4px" }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>Clear
+              </button>
+            </div>
+          )}
+
+          <div style={S.list}>
+            {loading ? (
+              <div style={{ textAlign: "center", padding: "60px 20px", color: "#94a3b8" }}>
+                <div style={{ fontSize: "14px" }}>Loading tasks…</div>
+              </div>
+            ) : currentList.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "60px 20px", color: "#94a3b8" }}>
+                <div style={{ fontSize: "36px", marginBottom: "12px" }}>{tab === "active" ? "🎉" : tab === "snoozed" ? "😴" : "✅"}</div>
+                <div style={{ fontSize: "16px", fontWeight: "600" }}>{tab === "active" ? "All clear!" : tab === "snoozed" ? "Nothing snoozed" : "No completed tasks"}</div>
+                <div style={{ fontSize: "14px", marginTop: "6px" }}>{tab === "active" ? "Tap + to add your first task." : ""}</div>
+              </div>
+            ) : (
+              currentList.map(task => <TaskCard key={task.id} task={task} />)
+            )}
+          </div>
+
+          {tab === "active" && (
+            <div style={S.quickAddBar}>
+              <div style={{ flex: 1, fontSize: "15px", color: "#94a3b8", padding: "12px 16px", borderRadius: "12px", border: "1px solid #e2e8f0", cursor: "pointer" }} onClick={() => setShowAddForm(true)}>Add a task...</div>
+              <button style={S.quickBtn} onClick={() => setShowAddForm(true)}><PlusIcon /></button>
+            </div>
+          )}
+
+          <div style={S.tabBar}>
+            <button style={S.tabItem(tab === "active")} onClick={() => { setTab("active"); setExpandedId(null); setEditTarget(null); }}><ClipboardIcon color={tab === "active" ? "#3b82f6" : "#94a3b8"} /><span>Active</span></button>
+            <button style={S.tabItem(tab === "snoozed")} onClick={() => { setTab("snoozed"); setExpandedId(null); setEditTarget(null); setSummaryFilter(null); }}><ClockIcon color={tab === "snoozed" ? "#3b82f6" : "#94a3b8"} /><span>Snoozed</span></button>
+            <button style={S.tabItem(tab === "done")} onClick={() => { setTab("done"); setExpandedId(null); setEditTarget(null); setSummaryFilter(null); }}><CheckCircleIcon color={tab === "done" ? "#3b82f6" : "#94a3b8"} /><span>Done</span></button>
+          </div>
+
+          {showDatePicker && (
+            <div style={S.overlay} onClick={() => setShowDatePicker(false)}>
+              <div style={S.modal} onClick={e => e.stopPropagation()}>
+                <div style={{ fontSize: "18px", fontWeight: "700", color: "#1e293b", marginBottom: "4px" }}>Time Travel</div>
+                <div style={{ fontSize: "14px", color: "#64748b", marginBottom: "16px" }}>See how your task priorities look on a different date:</div>
+                <button onClick={() => { setViewDate(null); setShowDatePicker(false); }} style={{ width: "100%", padding: "14px", borderRadius: "14px", border: isTimeTraveling ? "2px solid #e2e8f0" : "2px solid #3b82f6", background: isTimeTraveling ? "#f8fafc" : "#eff6ff", cursor: "pointer", marginBottom: "10px", display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", fontFamily: "Inter, sans-serif" }}>
+                  <span style={{ fontSize: "16px", fontWeight: "700", color: isTimeTraveling ? "#64748b" : "#3b82f6" }}>Today</span>
+                  <span style={{ fontSize: "13px", color: isTimeTraveling ? "#94a3b8" : "#60a5fa", fontWeight: "500" }}>{realToday.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}</span>
+                </button>
+                <div style={{ display: "flex", gap: "8px", marginBottom: "14px" }}>
+                  {[{ label: "+3 days", days: 3 }, { label: "+1 week", days: 7 }, { label: "+2 weeks", days: 14 }, { label: "+1 month", days: 30 }].map(opt => {
+                    const d = new Date(realToday); d.setDate(d.getDate() + opt.days);
+                    return (<button key={opt.days} onClick={() => { setViewDate(toISO(d)); setShowDatePicker(false); }} style={{ flex: 1, padding: "10px 4px", borderRadius: "10px", border: "1px solid #e2e8f0", background: "#f8fafc", cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: "12px", fontWeight: "600", color: "#f59e0b" }}>{opt.label}</button>);
+                  })}
+                </div>
+                <div style={{ fontSize: "12px", color: "#94a3b8", textAlign: "center", marginBottom: "10px", fontWeight: "500" }}>or pick a specific date</div>
+                <input type="date" defaultValue={viewDate || toISO(realToday)} onChange={e => { if (e.target.value) { const picked = parseLocalDate(e.target.value); picked.setHours(0,0,0,0); if (picked.getTime() === realToday.getTime()) { setViewDate(null); } else { setViewDate(e.target.value); } setShowDatePicker(false); } }} style={{ width: "100%", padding: "14px 16px", borderRadius: "12px", border: "1px solid #e2e8f0", fontSize: "16px", fontFamily: "Inter, sans-serif", outline: "none" }} />
+                <button onClick={() => setShowDatePicker(false)} style={{ width: "100%", marginTop: "14px", padding: "14px", borderRadius: "12px", border: "1px solid #e2e8f0", background: "#fff", fontSize: "15px", fontWeight: "600", color: "#64748b", cursor: "pointer", fontFamily: "Inter" }}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          <SnoozeModal />
+          <QuickAddModal />
+          {toast && <div style={S.toast}>{toast}</div>}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
