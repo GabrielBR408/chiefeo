@@ -1,8 +1,0 @@
-	
-rewrites	
-0	
-source	"/api/:path*"
-destination	"/api/:path*"
-1	
-source	"/(.*)"
-destination	"/index.html"
