@@ -827,7 +827,7 @@
 
           // Compute new position relative to where we started (which may be an already-open card)
           let newDx = (ref.startOffset || 0) + dx;
-          newDx = Math.max(-RIGHT_BTN_W - 10, Math.min(LEFT_BTN_W + 10, newDx));
+          newDx = Math.max(-RIGHT_BTN_W, Math.min(LEFT_BTN_W, newDx));
           setSwipeDx(newDx);
         };
 
@@ -848,15 +848,10 @@
           const isSwipeLeft = dx < 0;
           const isSwipeRight = dx > 0;
 
-          // Quick full-left flick → auto-trigger Done
-          if (isSwipeLeft && (velocity > 0.5 && Math.abs(dx) > 30) && Math.abs(dx) > RIGHT_BTN_W * 0.6) {
-            triggerAction("done"); return;
-          }
-
           if (isSwipeLeft) {
             if (Math.abs(dx) > 80) { snapOpen("left"); } else { snapClose(); }
           } else if (isSwipeRight) {
-            if (Math.abs(dx) > 40) { snapOpen("right"); } else { snapClose(); }
+            if (Math.abs(dx) > 80) { snapOpen("right"); } else { snapClose(); }
           }
         };
 
