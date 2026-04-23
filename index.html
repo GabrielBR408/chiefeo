@@ -455,7 +455,7 @@
               </button>
             </form>
 
-                        <div style={{ textAlign: "center", marginTop: "24px", fontSize: "14px", color: "#64748b" }}>
+            <div style={{ textAlign: "center", marginTop: "24px", fontSize: "14px", color: "#64748b" }}>
               {mode === "login" ? (
                 <>Don't have an account? <button onClick={() => { setMode("signup"); setError(null); }} style={{ background: "none", border: "none", color: "#3b82f6", fontWeight: "600", cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: "14px" }}>Sign up</button></>
               ) : (
@@ -512,6 +512,7 @@
       const [expandedId, setExpandedId] = useState(null);
       const [snoozeTarget, setSnoozeTarget] = useState(null);
       const [editTarget, setEditTarget] = useState(null);
+      const [swipeOpenId, setSwipeOpenId] = useState(null);
       const [menuOpen, setMenuOpen]     = useState(false);
       const [showAddForm, setShowAddForm] = useState(false);
       const [toast, setToast]           = useState(null);
@@ -770,45 +771,211 @@
           document.body.removeChild(ta); return ok;
         };
 
+        /* ── Swipe gesture state ── */
+        const swipeRef = React.useRef({ startX: 0, startY: 0, startTime: 0, dx: 0, dy: 0, decided: false, direction: null });
+        const [swipeDx, setSwipeDx] = React.useState(0);
+        const [bouncing, setBouncing] = React.useState(false);
+        const isSwipeOpen = swipeOpenId === task.id;
+
+        // Right-reveal width (Edit button) and left-reveal width (Done/Snooze/Trash)
+        const LEFT_BTN_W = 80;   // edit button
+        const RIGHT_BTN_W = 220; // 3 buttons × ~70px + gaps
+
+        const snapOpen = (dir) => {
+          if (dir === "right") { setSwipeDx(LEFT_BTN_W); setSwipeOpenId(task.id); }
+          else { setSwipeDx(-RIGHT_BTN_W); setSwipeOpenId(task.id); }
+        };
+
+        const snapClose = () => { setSwipeDx(0); if (swipeOpenId === task.id) setSwipeOpenId(null); };
+
+        const triggerAction = (action) => {
+          setBouncing(true);
+          setTimeout(() => setBouncing(false), 200);
+          snapClose();
+          if (action === "done") { updateTask(task.id, { complete: true }); setExpandedId(null); showToast("Done!"); }
+          else if (action === "snooze") { setSnoozeTarget(task.id); }
+          else if (action === "trash") { updateTask(task.id, { trashed: true }); setExpandedId(null); showToast("Trashed"); }
+          else if (action === "edit") { setExpandedId(task.id); setEditTarget(task.id); }
+        };
+
+        const onTouchStart = (e) => {
+          // Close other open cards
+          if (swipeOpenId && swipeOpenId !== task.id) { setSwipeDx(0); setSwipeOpenId(null); }
+          const t = e.touches[0];
+          // Capture the current offset so move calculations are correct if card is already swiped open
+          const startOffset = swipeOpenId === task.id ? (swipeDx > 0 ? LEFT_BTN_W : -RIGHT_BTN_W) : 0;
+          swipeRef.current = { startX: t.clientX, startY: t.clientY, startTime: Date.now(), dx: 0, dy: 0, decided: false, direction: null, startOffset };
+        };
+
+        const onTouchMove = (e) => {
+          const t = e.touches[0];
+          const ref = swipeRef.current;
+          const dx = t.clientX - ref.startX;
+          const dy = t.clientY - ref.startY;
+          ref.dx = dx; ref.dy = dy;
+
+          // Abort on vertical scroll: if vertical > horizontal in first 10px of movement
+          if (!ref.decided && (Math.abs(dx) < 10 && Math.abs(dy) < 10)) return;
+          if (!ref.decided) {
+            if (Math.abs(dy) > Math.abs(dx)) { ref.decided = true; ref.direction = "vertical"; return; }
+            ref.decided = true;
+            ref.direction = dx > 0 ? "right" : "left";
+          }
+          if (ref.direction === "vertical") return;
+
+          e.preventDefault(); // prevent scroll while swiping horizontally
+
+          // Compute new position relative to where we started (which may be an already-open card)
+          let newDx = (ref.startOffset || 0) + dx;
+          newDx = Math.max(-RIGHT_BTN_W - 10, Math.min(LEFT_BTN_W + 10, newDx));
+          setSwipeDx(newDx);
+        };
+
+        const onTouchEnd = () => {
+          const ref = swipeRef.current;
+          const dx = ref.dx;
+          const elapsed = Date.now() - ref.startTime;
+          const velocity = Math.abs(dx) / elapsed; // px/ms
+          const isTap = Math.abs(dx) < 40;
+
+          if (ref.direction === "vertical" || isTap) {
+            // Treat as tap — if card is open close it, else let onClick fire
+            if (isSwipeOpen) { snapClose(); return; }
+            // onClick will fire naturally
+            return;
+          }
+
+          const isSwipeLeft = dx < 0;
+          const isSwipeRight = dx > 0;
+
+          // Quick full-left flick → auto-trigger Done
+          if (isSwipeLeft && (velocity > 0.5 && Math.abs(dx) > 30) && Math.abs(dx) > RIGHT_BTN_W * 0.6) {
+            triggerAction("done"); return;
+          }
+
+          if (isSwipeLeft) {
+            if (Math.abs(dx) > 80) { snapOpen("left"); } else { snapClose(); }
+          } else if (isSwipeRight) {
+            if (Math.abs(dx) > 40) { snapOpen("right"); } else { snapClose(); }
+          }
+        };
+
+        // Determine if this card is currently open to the right (edit) or left (actions)
+        const cardStyle = {
+          ...S.taskCard(score, status),
+          // Override these so outer clip container handles border-radius
+          borderRadius: 0,
+          boxShadow: "none",
+          outline: "none",
+          marginBottom: 0,
+          transform: bouncing ? "scale(0.97)" : "scale(1)",
+          transition: bouncing ? "transform 150ms ease-out" : "transform 150ms ease-out",
+          willChange: "transform",
+          touchAction: "pan-y",
+          userSelect: "none",
+        };
+
+        const slideStyle = {
+          transform: `translateX(${swipeDx}px)`,
+          transition: swipeRef.current.decided && swipeRef.current.direction !== "vertical" ? "none" : "transform 0.3s cubic-bezier(0.34,1.56,0.64,1)",
+          willChange: "transform",
+          position: "relative",
+          zIndex: 1,
+          background: status === "overdue" ? "rgba(239,68,68,0.04)" : "#fff",
+          borderRadius: "14px",
+          borderLeft: "4px solid " + (status === "snoozed" ? "#c4b5fd" : status === "completed" ? "#86efac" : borderColor(score)),
+          boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+          outline: status === "overdue" ? "1px solid rgba(239,68,68,0.15)" : "none",
+          opacity: status === "snoozed" ? 0.7 : 1,
+        };
+
         return (
-          <div style={S.taskCard(score, status)}>
-            <div style={S.cardInner} onClick={() => toggleExpand(task.id)}>
-              {task.complete ? (
-                <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f0fdf4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#22c55e" }}><CheckIcon /></div>
-              ) : (
-                <div style={S.scoreBadge(score)}>{score.toFixed(1)}</div>
-              )}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={S.taskName(task.complete)}>{task.name}</div>
-                {dueText && <div style={S.dueLabel(dueStatus)}>{dueText}</div>}
-                {status === "snoozed" && task.postponeUntil && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
-                {status !== "snoozed" && task.postponeUntil && !task.complete && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
-              </div>
-              <ChevronIcon expanded={isExpanded} />
+          <div style={{ position: "relative", borderRadius: "14px", overflow: "hidden", marginBottom: "8px", cursor: "pointer" }}>
+            {/* Left reveal: Edit button (shown on swipe-right) */}
+            <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: LEFT_BTN_W, display: "flex", alignItems: "stretch", zIndex: 0 }}>
+              <button
+                style={{ flex: 1, background: "#007AFF", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", color: "#fff", fontSize: "12px", fontWeight: "700", fontFamily: "Inter, sans-serif" }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); triggerAction("edit"); }}
+              >
+                <EditIcon />
+                Edit
+              </button>
             </div>
-            {isExpanded && (
-              <div style={S.expandArea}>
-                {editTarget === task.id ? (
-                  <EditForm task={task} onSave={(changes) => { updateTask(task.id, changes); setEditTarget(null); showToast("Saved"); }} onCancel={() => setEditTarget(null)} />
+
+            {/* Right reveal: Done / Snooze / Trash (shown on swipe-left) */}
+            <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: RIGHT_BTN_W, display: "flex", alignItems: "stretch", zIndex: 0 }}>
+              <button
+                style={{ flex: 1, background: "#34C759", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", color: "#fff", fontSize: "12px", fontWeight: "700", fontFamily: "Inter, sans-serif" }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); triggerAction("done"); }}
+              >
+                <CheckIcon />
+                Done
+              </button>
+              <button
+                style={{ flex: 1, background: "#AF52DE", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", color: "#fff", fontSize: "12px", fontWeight: "700", fontFamily: "Inter, sans-serif" }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); triggerAction("snooze"); }}
+              >
+                <SnoozeIcon />
+                Snooze
+              </button>
+              <button
+                style={{ flex: 1, background: "#FF3B30", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", color: "#fff", fontSize: "12px", fontWeight: "700", fontFamily: "Inter, sans-serif" }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); triggerAction("trash"); }}
+              >
+                <TrashIcon />
+                Trash
+              </button>
+            </div>
+
+            {/* Card content layer — slides over the reveal buttons */}
+            <div
+              style={slideStyle}
+              onTouchStart={onTouchStart}
+              onTouchMove={onTouchMove}
+              onTouchEnd={onTouchEnd}
+            >
+              <div style={S.cardInner} onClick={() => { if (isSwipeOpen) { snapClose(); return; } toggleExpand(task.id); }}>
+                {task.complete ? (
+                  <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f0fdf4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#22c55e" }}><CheckIcon /></div>
                 ) : (
-                  <React.Fragment>
-                    <div style={S.detailGrid}>
-                      <div><div style={S.detailLabel}>Start Date</div><div style={S.detailValue}>{fmtFull(task.startDate)}</div></div>
-                      <div><div style={S.detailLabel}>Due Date</div><div style={S.detailValue}>{fmtFull(task.dueDate)}</div></div>
-                      <div><div style={S.detailLabel}>Start Priority</div><div style={S.detailValue}>{task.startPriority.toFixed(1)}</div></div>
-                      <div><div style={S.detailLabel}>Peak Priority</div><div style={S.detailValue}>{task.peakPriority.toFixed(1)}</div></div>
-                    </div>
-                    <div style={S.actionRow}>
-                      <button style={S.actionBtn("#f0fdf4", "#22c55e")} onClick={(e) => { e.stopPropagation(); updateTask(task.id, { complete: true }); setExpandedId(null); showToast("Done!"); }}><CheckIcon /> Done</button>
-                      <button style={S.actionBtn("#f5f3ff", "#a78bfa")} onClick={(e) => { e.stopPropagation(); setSnoozeTarget(task.id); }}><SnoozeIcon /> Snooze</button>
-                      <button style={S.actionBtn("#eff6ff", "#3b82f6")} onClick={(e) => { e.stopPropagation(); setEditTarget(task.id); }}><EditIcon /> Edit</button>
-                      <button style={S.actionBtn("#fffbeb", "#d97706")} title="Copy task name" onClick={async (e) => { e.stopPropagation(); const text = task.name || ""; try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); showToast("Name copied"); } else if (fallbackCopy(text)) { showToast("Name copied"); } else { showToast("Copy failed"); } } catch (err) { fallbackCopy(text) ? showToast("Name copied") : showToast("Copy failed"); } }}><CopyIcon /> Copy</button>
-                      <button style={S.actionBtn("#fef2f2", "#ef4444")} onClick={(e) => { e.stopPropagation(); updateTask(task.id, { trashed: true }); setExpandedId(null); showToast("Trashed"); }}><TrashIcon /> Trash</button>
-                    </div>
-                  </React.Fragment>
+                  <div style={S.scoreBadge(score)}>{score.toFixed(1)}</div>
                 )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={S.taskName(task.complete)}>{task.name}</div>
+                  {dueText && <div style={S.dueLabel(dueStatus)}>{dueText}</div>}
+                  {status === "snoozed" && task.postponeUntil && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
+                  {status !== "snoozed" && task.postponeUntil && !task.complete && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
+                </div>
+                <ChevronIcon expanded={isExpanded} />
               </div>
-            )}
+              {isExpanded && (
+                <div style={S.expandArea}>
+                  {editTarget === task.id ? (
+                    <EditForm task={task} onSave={(changes) => { updateTask(task.id, changes); setEditTarget(null); showToast("Saved"); }} onCancel={() => setEditTarget(null)} />
+                  ) : (
+                    <React.Fragment>
+                      <div style={S.detailGrid}>
+                        <div><div style={S.detailLabel}>Start Date</div><div style={S.detailValue}>{fmtFull(task.startDate)}</div></div>
+                        <div><div style={S.detailLabel}>Due Date</div><div style={S.detailValue}>{fmtFull(task.dueDate)}</div></div>
+                        <div><div style={S.detailLabel}>Start Priority</div><div style={S.detailValue}>{task.startPriority.toFixed(1)}</div></div>
+                        <div><div style={S.detailLabel}>Peak Priority</div><div style={S.detailValue}>{task.peakPriority.toFixed(1)}</div></div>
+                      </div>
+                      <div style={S.actionRow}>
+                        <button style={S.actionBtn("#f0fdf4", "#22c55e")} onClick={(e) => { e.stopPropagation(); updateTask(task.id, { complete: true }); setExpandedId(null); showToast("Done!"); }}><CheckIcon /> Done</button>
+                        <button style={S.actionBtn("#f5f3ff", "#a78bfa")} onClick={(e) => { e.stopPropagation(); setSnoozeTarget(task.id); }}><SnoozeIcon /> Snooze</button>
+                        <button style={S.actionBtn("#eff6ff", "#3b82f6")} onClick={(e) => { e.stopPropagation(); setEditTarget(task.id); }}><EditIcon /> Edit</button>
+                        <button style={S.actionBtn("#fffbeb", "#d97706")} title="Copy task name" onClick={async (e) => { e.stopPropagation(); const text = task.name || ""; try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); showToast("Name copied"); } else if (fallbackCopy(text)) { showToast("Name copied"); } else { showToast("Copy failed"); } } catch (err) { fallbackCopy(text) ? showToast("Name copied") : showToast("Copy failed"); } }}><CopyIcon /> Copy</button>
+                        <button style={S.actionBtn("#fef2f2", "#ef4444")} onClick={(e) => { e.stopPropagation(); updateTask(task.id, { trashed: true }); setExpandedId(null); showToast("Trashed"); }}><TrashIcon /> Trash</button>
+                      </div>
+                    </React.Fragment>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         );
       };
