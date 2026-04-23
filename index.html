@@ -406,7 +406,7 @@
           } else {
             const { data, error } = await sb.auth.signInWithPassword({ email, password });
             if (error) throw error;
-            onAuth(data.user);
+            onAuth(data.user, password);
           }
         } catch (err) {
           setError(err.message || "Something went wrong");
@@ -470,9 +470,26 @@
     /* ══════════════════════════════════════════════════════════════
        MAIN APP
     ══════════════════════════════════════════════════════════════ */
+    /* ── Multi-account config (Gabe's 3 accounts only) ── */
+    const ACCOUNTS = [
+      { id: "lpc",      label: "LPC",      email: "groberts@lpc.com",             color: "#3b82f6", bg: "#eff6ff" },
+      { id: "greve",    label: "GREVE",    email: "grevelandre@gmail.com",         color: "#10b981", bg: "#ecfdf5" },
+      { id: "personal", label: "Personal", email: "gabrielbroberts@gmail.com",     color: "#8b5cf6", bg: "#f5f3ff" },
+    ];
+    const ACCOUNT_EMAILS = ACCOUNTS.map(a => a.email);
+    function getAccountByEmail(email) { return ACCOUNTS.find(a => a.email === email) || null; }
+    function saveCredentials(email, password) {
+      try { sessionStorage.setItem("chiefeo_cred_" + email, password); } catch(e) {}
+    }
+    function getSavedCredential(email) {
+      try { return sessionStorage.getItem("chiefeo_cred_" + email); } catch(e) { return null; }
+    }
+
     function App() {
       const [user, setUser]             = useState(null);
       const [authChecked, setAuthChecked] = useState(false);
+      const [switching, setSwitching]   = useState(false);
+      const [switchError, setSwitchError] = useState(null);
 
       // ── Auth bootstrap ──────────────────────────────────────────
       useEffect(() => {
@@ -487,6 +504,36 @@
         return () => subscription.unsubscribe();
       }, []);
 
+      // ── Switch account ──────────────────────────────────────────
+      const switchAccount = async (targetEmail) => {
+        setSwitchError(null);
+        const password = getSavedCredential(targetEmail);
+        if (!password) {
+          // No saved credential — prompt via a quick inline input
+          setSwitching(targetEmail);
+          return;
+        }
+        await doSwitch(targetEmail, password);
+      };
+
+      const doSwitch = async (email, password) => {
+        setSwitching(false);
+        const sb = getSupabase();
+        await sb.auth.signOut();
+        const { data, error } = await sb.auth.signInWithPassword({ email, password });
+        if (error) { setSwitchError("Wrong password for " + email); return; }
+        saveCredentials(email, password);
+        setUser(data.user);
+      };
+
+      // ── Handle auth (saves credentials for known accounts) ──────
+      const handleAuth = (user, password) => {
+        if (password && ACCOUNT_EMAILS.includes(user.email)) {
+          saveCredentials(user.email, password);
+        }
+        setUser(user);
+      };
+
       if (!authChecked) {
         return (
           <div style={{ maxWidth: 430, margin: "0 auto", minHeight: "100vh", background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -495,14 +542,43 @@
         );
       }
 
-      if (!user) return <AuthScreen onAuth={setUser} />;
-      return <TaskApp user={user} onSignOut={() => { getSupabase().auth.signOut(); }} />;
+      if (!user) return <AuthScreen onAuth={handleAuth} />;
+
+      // Password prompt overlay for accounts not yet cached this session
+      if (switching && typeof switching === "string") {
+        const acct = getAccountByEmail(switching);
+        return <PasswordPrompt account={acct} onSubmit={(pw) => doSwitch(switching, pw)} onCancel={() => setSwitching(false)} error={switchError} />;
+      }
+
+      return <TaskApp user={user} onSignOut={() => { getSupabase().auth.signOut(); }} switchAccount={switchAccount} switchError={switchError} />;
+    }
+
+    /* ── Password prompt screen (shown when switching to uncached account) ── */
+    function PasswordPrompt({ account, onSubmit, onCancel, error }) {
+      const [pw, setPw] = useState("");
+      const [loading, setLoading] = useState(false);
+      const color = account?.color || "#3b82f6";
+      return (
+        <div style={{ maxWidth: 430, margin: "0 auto", minHeight: "100vh", background: "#f8fafc", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "40px 24px", boxShadow: "0 0 40px rgba(0,0,0,0.12)" }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: account?.bg || "#eff6ff", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+            <span style={{ fontSize: 24, fontWeight: 800, color }}>{account?.label?.[0] || "?"}</span>
+          </div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#1e293b", marginBottom: 4 }}>Switch to {account?.label}</div>
+          <div style={{ fontSize: 13, color: "#64748b", marginBottom: 24 }}>{account?.email}</div>
+          {error && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", padding: "10px 14px", borderRadius: 10, fontSize: 13, marginBottom: 16, width: "100%" }}>{error}</div>}
+          <input type="password" placeholder="Password" value={pw} onChange={e => setPw(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && pw) { setLoading(true); onSubmit(pw); } }} autoFocus style={{ width: "100%", padding: "14px 16px", borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 15, fontFamily: "Inter, sans-serif", outline: "none", marginBottom: 12, color: "#1e293b" }} />
+          <button disabled={!pw || loading} onClick={() => { setLoading(true); onSubmit(pw); }} style={{ width: "100%", padding: 15, borderRadius: 12, border: "none", background: color, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "Inter, sans-serif", opacity: (!pw || loading) ? 0.6 : 1 }}>
+            {loading ? "Signing in…" : "Switch account"}
+          </button>
+          <button onClick={onCancel} style={{ marginTop: 12, background: "none", border: "none", color: "#64748b", fontSize: 14, cursor: "pointer", fontFamily: "Inter" }}>Cancel</button>
+        </div>
+      );
     }
 
     /* ══════════════════════════════════════════════════════════════
        TASK APP  (shown after auth)
     ══════════════════════════════════════════════════════════════ */
-    function TaskApp({ user, onSignOut }) {
+    function TaskApp({ user, onSignOut, switchAccount, switchError }) {
       const [tasks, setTasks]           = useState([]);
       const [loading, setLoading]       = useState(true);
       const [syncStatus, setSyncStatus] = useState("idle"); // idle | saving | saved | error
@@ -513,6 +589,7 @@
       const [snoozeTarget, setSnoozeTarget] = useState(null);
       const [editTarget, setEditTarget] = useState(null);
       const [swipeOpenId, setSwipeOpenId] = useState(null);
+      const [showSwitcher, setShowSwitcher] = useState(false);
       const [menuOpen, setMenuOpen]     = useState(false);
       const [showAddForm, setShowAddForm] = useState(false);
       const [toast, setToast]           = useState(null);
@@ -1201,7 +1278,24 @@
               <div>
                 <div style={S.title}>ChiefEO</div>
                 <div style={S.subtitle}>
-                  {user.email}
+                  {(() => {
+                    const acct = getAccountByEmail(user.email);
+                    if (acct) {
+                      return (
+                        <span
+                          onClick={() => setShowSwitcher(true)}
+                          style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "5px" }}
+                        >
+                          <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: acct.color, flexShrink: 0 }}></span>
+                          <span style={{ color: acct.color, fontWeight: 600 }}>{acct.label}</span>
+                          <span style={{ color: "#64748b" }}>·</span>
+                          <span>{user.email}</span>
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                        </span>
+                      );
+                    }
+                    return <span>{user.email}</span>;
+                  })()}
                   {syncStatus === "saving" && <span style={{ color: "#f59e0b", marginLeft: "8px" }}>● Saving…</span>}
                   {syncStatus === "saved"  && <span style={{ color: "#10b981", marginLeft: "8px" }}>● Saved</span>}
                   {syncStatus === "error"  && <span style={{ color: "#f87171", marginLeft: "8px" }}>● Sync error</span>}
@@ -1327,6 +1421,43 @@
           <SnoozeModal />
           <QuickAddModal />
           {toast && <div style={S.toast}>{toast}</div>}
+
+          {/* ── Account Switcher Sheet ── */}
+          {showSwitcher && (
+            <div style={S.overlay} onClick={() => setShowSwitcher(false)}>
+              <div style={{ ...S.modal, paddingBottom: "32px" }} onClick={e => e.stopPropagation()}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "18px" }}>
+                  <div style={{ fontSize: "18px", fontWeight: "700", color: "#1e293b" }}>Switch Account</div>
+                  <button onClick={() => setShowSwitcher(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><CloseIcon /></button>
+                </div>
+                {ACCOUNTS.map(acct => {
+                  const isActive = user.email === acct.email;
+                  const isCached = !!getSavedCredential(acct.email);
+                  return (
+                    <button
+                      key={acct.id}
+                      disabled={isActive}
+                      onClick={() => { setShowSwitcher(false); switchAccount(acct.email); }}
+                      style={{ width: "100%", display: "flex", alignItems: "center", gap: "14px", padding: "14px 16px", borderRadius: "14px", border: isActive ? `2px solid ${acct.color}` : "2px solid #e2e8f0", background: isActive ? acct.bg : "#fff", cursor: isActive ? "default" : "pointer", marginBottom: "10px", fontFamily: "Inter, sans-serif", textAlign: "left" }}
+                    >
+                      <div style={{ width: 44, height: 44, borderRadius: 12, background: acct.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ fontSize: 18, fontWeight: 800, color: acct.color }}>{acct.label[0]}</span>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: "15px", fontWeight: "700", color: isActive ? acct.color : "#1e293b" }}>{acct.label}</div>
+                        <div style={{ fontSize: "12px", color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{acct.email}</div>
+                      </div>
+                      <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "3px" }}>
+                        {isActive && <span style={{ fontSize: "11px", fontWeight: "700", color: acct.color, background: acct.bg, padding: "2px 8px", borderRadius: "6px" }}>Active</span>}
+                        {!isActive && isCached && <span style={{ fontSize: "11px", color: "#10b981", fontWeight: "600" }}>✓ saved</span>}
+                        {!isActive && !isCached && <span style={{ fontSize: "11px", color: "#94a3b8" }}>tap to login</span>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       );
     }
