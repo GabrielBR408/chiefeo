@@ -1,5 +1,6 @@
 // ChiefEO Intake API — Vercel Serverless Function
 // POST /api/intake — accepts tasks array, inserts into Supabase
+// GET  /api/intake — returns dedup data for the caller's user (existingTasks + processedThreadIds)
 //
 // Multi-user via key→UUID mapping (Option B):
 //   CHIEFEO_API_KEY_PERSONAL  → CHIEFEO_USER_ID_PERSONAL
@@ -35,30 +36,68 @@ function resolveUserFromApiKey(apiKey) {
   return null;
 }
 
-export default async function handler(req, res) {
-  // ── CORS ────────────────────────────────────────
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
+// ── GET handler: returns dedup data for the resolved user ─────────
+async function handleGet(req, res, USER_ID, USER_LABEL) {
+  const SUPABASE_URL = process.env.SUPABASE_URL;
+  const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+  if (!SUPABASE_URL || !SUPABASE_KEY || !USER_ID) {
+    return res.status(500).json({ error: 'Server misconfigured — missing environment variables' });
   }
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  try {
+    // Fetch all non-trashed tasks (for dedup + xlsx archive)
+    const tasksResp = await fetch(
+      `${SUPABASE_URL}/rest/v1/tasks?user_id=eq.${USER_ID}&trashed=eq.false&order=id.desc`,
+      {
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+        },
+      }
+    );
 
-  // ── Auth → resolve user ─────────────────────────
-  const apiKey = req.headers['x-api-key'];
-  const resolved = resolveUserFromApiKey(apiKey);
-  if (!resolved) {
-    return res.status(401).json({ error: 'Invalid or missing API key' });
-  }
-  const USER_ID = resolved.userId;
-  const USER_LABEL = resolved.label;
+    if (!tasksResp.ok) {
+      const errBody = await tasksResp.text();
+      return res.status(502).json({ error: `Failed to fetch tasks: ${tasksResp.status} ${errBody}` });
+    }
+    const existingTasks = await tasksResp.json();
 
-  // ── Parse body ──────────────────────────────────
+    // Fetch priorities config (for processedGmailThreadIds + people list for scoring)
+    const prioResp = await fetch(
+      `${SUPABASE_URL}/rest/v1/priorities?user_id=eq.${USER_ID}&select=config`,
+      {
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+        },
+      }
+    );
+
+    let config = null;
+    let prioritiesRowExists = false;
+    if (prioResp.ok) {
+      const rows = await prioResp.json();
+      if (rows.length > 0) {
+        config = rows[0].config || {};
+        prioritiesRowExists = true;
+      }
+    }
+
+    return res.status(200).json({
+      user: USER_LABEL,
+      existingTasks,
+      processedThreadIds: config?.processedGmailThreadIds || [],
+      prioritiesRowExists,
+      config, // full config so skill can use people list for scoring without a second call
+    });
+  } catch (err) {
+    return res.status(500).json({ error: `Failed to load dedup data: ${err.message}` });
+  }
+}
+
+// ── POST handler: inserts tasks + upserts priorities ──────────────
+async function handlePost(req, res, USER_ID, USER_LABEL) {
   const { tasks, processedThreadIds, seedConfig } = req.body || {};
 
   if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
@@ -75,12 +114,10 @@ export default async function handler(req, res) {
   const inserted = [];
   const errors = [];
 
-  // ── Insert tasks one by one ─────────────────────
-  // (one-by-one so partial failures don't block the rest)
+  // Insert tasks one by one (so partial failures don't block the rest)
   for (let i = 0; i < tasks.length; i++) {
     const t = tasks[i];
 
-    // Validate required fields
     if (!t.name || !t.start_date || !t.due_date) {
       errors.push({ index: i, name: t.name || '(unnamed)', error: 'Missing required fields: name, start_date, due_date' });
       continue;
@@ -122,16 +159,13 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── Update processedGmailThreadIds + first-run seeding ──
-  // Runs when either processedThreadIds is provided OR seedConfig is provided
-  // (first-run seed with no thread IDs is still a valid "initialize priorities" call)
+  // Update processedGmailThreadIds + first-run seeding
   const shouldTouchPriorities =
     (processedThreadIds && Array.isArray(processedThreadIds) && processedThreadIds.length > 0) ||
     (seedConfig && typeof seedConfig === 'object');
 
   if (shouldTouchPriorities) {
     try {
-      // Fetch current priorities config
       const getResp = await fetch(
         `${SUPABASE_URL}/rest/v1/priorities?user_id=eq.${USER_ID}&select=config`,
         {
@@ -152,12 +186,10 @@ export default async function handler(req, res) {
         }
       }
 
-      // First-run: seed from provided seedConfig (usually from handoff priorities.json)
       if (!rowExists) {
         currentConfig = seedConfig && typeof seedConfig === 'object' ? { ...seedConfig } : {};
       }
 
-      // Merge new thread IDs (deduplicated, cap at 500 — keep most recent)
       if (processedThreadIds && Array.isArray(processedThreadIds) && processedThreadIds.length > 0) {
         const existing = currentConfig.processedGmailThreadIds || [];
         const merged = [...new Set([...existing, ...processedThreadIds])];
@@ -167,7 +199,6 @@ export default async function handler(req, res) {
         currentConfig.processedGmailThreadIds = [];
       }
 
-      // Upsert priorities row
       const upsertResp = await fetch(`${SUPABASE_URL}/rest/v1/priorities`, {
         method: 'POST',
         headers: {
@@ -191,11 +222,38 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── Response ────────────────────────────────────
   return res.status(errors.length > 0 && inserted.length === 0 ? 207 : 200).json({
     success: inserted.length > 0,
     user: USER_LABEL,
     inserted,
     errors,
   });
+}
+
+// ── Main handler: CORS + auth + route to GET or POST ──────────────
+export default async function handler(req, res) {
+  // CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // Auth → resolve user
+  const apiKey = req.headers['x-api-key'];
+  const resolved = resolveUserFromApiKey(apiKey);
+  if (!resolved) {
+    return res.status(401).json({ error: 'Invalid or missing API key' });
+  }
+
+  if (req.method === 'GET') {
+    return handleGet(req, res, resolved.userId, resolved.label);
+  }
+  return handlePost(req, res, resolved.userId, resolved.label);
 }
