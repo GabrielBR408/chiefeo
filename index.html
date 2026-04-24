@@ -238,26 +238,9 @@
       return "active";
     }
 
-    function borderColor(score) {
-      if (score >= 8) return "#ef4444";
-      if (score >= 6) return "#f59e0b";
-      if (score >= 4) return "#3b82f6";
-      return "#94a3b8";
-    }
-    function scoreBg(score) {
-      if (score >= 8) return "#fef2f2";
-      if (score >= 6) return "#fffbeb";
-      if (score >= 4) return "#eff6ff";
-      return "#f1f5f9";
-    }
-    function scoreColor(score) {
-      if (score >= 8) return "#dc2626";
-      if (score >= 6) return "#d97706";
-      if (score >= 4) return "#2563eb";
-      return "#64748b";
-    }
-
     /* ══════════════ V4 Tier Scoring ══════════════ */
+    /* Band boundaries — match TIER_TO_PRIORITY ranges below.
+       Score >= 5.5 = High, 3.0-5.5 = Medium, 1.0-3.0 = Low, < 1.0 = Suppress. */
     const TIER_TO_PRIORITY = {
       "High":     { start: 5.5, peak: 8.5 },
       "Medium":   { start: 3.0, peak: 5.5 },
@@ -271,6 +254,21 @@
       "Low":      { bg: "#e0e7ff", fg: "#3730a3", border: "#a5b4fc" },
       "Suppress": { bg: "#e5e7eb", fg: "#4b5563", border: "#9ca3af" },
     };
+    const TIER_LABEL_SHORT = { "High": "HIGH", "Medium": "MED", "Low": "LOW", "Suppress": "MUTE" };
+
+    /* Convert a continuous 0-10 score into its band name. */
+    function bandFromScore(score) {
+      if (score >= 5.5) return "High";
+      if (score >= 3.0) return "Medium";
+      if (score >= 1.0) return "Low";
+      return "Suppress";
+    }
+
+    /* Color helpers — all derived from the band, so list colors and
+       graph colors stay in lockstep with the engine. */
+    function borderColor(score) { return TIER_COLOR[bandFromScore(score)].border; }
+    function scoreBg(score)     { return TIER_COLOR[bandFromScore(score)].bg; }
+    function scoreColor(score)  { return TIER_COLOR[bandFromScore(score)].fg; }
 
     function valueToTier(v) {
       if (v < 0.5) return "Suppress";
@@ -860,7 +858,7 @@
         list: { flex: 1, overflowY: "auto", padding: "8px 16px", paddingBottom: "140px" },
         taskCard: (score, status) => ({ background: status === "overdue" ? "rgba(239,68,68,0.04)" : "#fff", borderRadius: "14px", borderLeft: "4px solid " + (status === "snoozed" ? "#c4b5fd" : status === "completed" ? "#86efac" : borderColor(score)), boxShadow: "0 1px 3px rgba(0,0,0,0.06)", outline: status === "overdue" ? "1px solid rgba(239,68,68,0.15)" : "none", marginBottom: "8px", opacity: status === "snoozed" ? 0.7 : 1, transition: "all 0.15s ease", cursor: "pointer" }),
         cardInner: { display: "flex", alignItems: "center", padding: "14px 14px 14px 12px", gap: "12px" },
-        scoreBadge: (score) => ({ width: "36px", height: "36px", borderRadius: "10px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: scoreBg(score), fontSize: "14px", fontWeight: "700", color: scoreColor(score) }),
+        scoreBadge: (score) => ({ minWidth: "48px", height: "36px", padding: "0 8px", borderRadius: "10px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: scoreBg(score), fontSize: "11px", fontWeight: "700", letterSpacing: "0.5px", color: scoreColor(score) }),
         taskName: (done) => ({ fontSize: "15px", fontWeight: "500", color: done ? "#94a3b8" : "#1e293b", flex: 1, lineHeight: "1.3", textDecoration: done ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }),
         dueLabel: (status) => ({ fontSize: "11px", fontWeight: "600", color: status === "overdue" ? "#ef4444" : status === "active" ? "#f59e0b" : "#94a3b8", marginTop: "3px" }),
         snoozeBadge: { display: "inline-block", fontSize: "10px", fontWeight: "600", color: "#a78bfa", background: "#f5f3ff", borderRadius: "6px", padding: "2px 7px", marginTop: "4px" },
@@ -1098,7 +1096,7 @@
                 {task.complete ? (
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f0fdf4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#22c55e" }}><CheckIcon /></div>
                 ) : (
-                  <div style={S.scoreBadge(score)}>{score.toFixed(1)}</div>
+                  <div style={S.scoreBadge(score)}>{TIER_LABEL_SHORT[bandFromScore(score)]}</div>
                 )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={S.taskName(task.complete)}>{task.name}</div>
@@ -1117,8 +1115,8 @@
                       <div style={S.detailGrid}>
                         <div><div style={S.detailLabel}>Start Date</div><div style={S.detailValue}>{fmtFull(task.startDate)}</div></div>
                         <div><div style={S.detailLabel}>Due Date</div><div style={S.detailValue}>{fmtFull(task.dueDate)}</div></div>
-                        <div><div style={S.detailLabel}>Start Priority</div><div style={S.detailValue}>{task.startPriority.toFixed(1)}</div></div>
-                        <div><div style={S.detailLabel}>Peak Priority</div><div style={S.detailValue}>{task.peakPriority.toFixed(1)}</div></div>
+                        <div><div style={S.detailLabel}>Starts in</div><div style={S.detailValue}>{bandFromScore(task.startPriority)}</div></div>
+                        <div><div style={S.detailLabel}>Peaks in</div><div style={S.detailValue}>{bandFromScore(task.peakPriority)}</div></div>
                       </div>
                       <div style={S.actionRow}>
                         <button style={S.actionBtn("#f0fdf4", "#22c55e")} onClick={(e) => { e.stopPropagation(); updateTask(task.id, { complete: true }); setExpandedId(null); showToast("Done!"); }}><CheckIcon /> Done</button>
@@ -1135,6 +1133,289 @@
           </div>
         );
       };
+
+      /* ── Priority Graph (band-based draggable entry) ──
+         Two dots — Start (lighter) and Peak (darker) — sit on a 3-band y-axis.
+         X-axis spans from start_date (left) to due_date (right), with a small
+         pad on each side so the dots aren't pinned to the edge. Dragging a dot
+         vertically changes priority; dragging horizontally changes the date.
+         All four values are continuous under the hood — bands are just visual.
+      */
+      function PriorityGraph({ startDate, dueDate, startPriority, peakPriority, onChange }) {
+        const svgRef = React.useRef(null);
+        // Layout
+        const VB = { w: 340, h: 200, padL: 36, padR: 14, padT: 10, padB: 26 };
+        const plotW = VB.w - VB.padL - VB.padR;
+        const plotH = VB.h - VB.padT - VB.padB;
+
+        // Time axis — give the user real room to drag dates outward.
+        // Window expands as dates push outward but doesn't shrink (to avoid
+        // visual bouncing while dragging). We persist the widest window seen
+        // for this mount in a ref.
+        const sd = new Date(startDate);
+        const dd = new Date(dueDate);
+        const DAY = 86400000;
+        const minPad = 7 * DAY;          // at least a week of room on each side
+        const range  = Math.max(DAY, dd.getTime() - sd.getTime());
+        const dynPad = Math.max(minPad, range * 0.5);  // 50% of span, or 7d
+        const wantedLeft  = sd.getTime() - dynPad;
+        const wantedRight = dd.getTime() + dynPad;
+
+        // Window behavior:
+        //  - While dragging: grow to follow the dot, never shrink (prevents
+        //    visual bouncing as the cursor crosses the edge).
+        //  - On drop: re-fit the window snugly to the current dates so a
+        //    later drag back to earlier dates doesn't leave you stranded
+        //    in a stale wide view.
+        // `windowEpoch` is bumped by onUp to trigger a refit on the next render.
+        const windowRef = React.useRef(null);
+        const dragRef   = React.useRef(null);
+        const [windowEpoch, setWindowEpoch] = React.useState(0);
+
+        if (!windowRef.current || !dragRef.current) {
+          // Not dragging — snap fresh to the current dates
+          windowRef.current = { leftMs: wantedLeft, rightMs: wantedRight };
+        } else {
+          // Mid-drag — grow only, never shrink
+          windowRef.current.leftMs  = Math.min(windowRef.current.leftMs,  wantedLeft);
+          windowRef.current.rightMs = Math.max(windowRef.current.rightMs, wantedRight);
+        }
+        const leftMs  = windowRef.current.leftMs;
+        const rightMs = windowRef.current.rightMs;
+
+        const tx = (ms) => VB.padL + ((ms - leftMs) / (rightMs - leftMs)) * plotW;
+        const xToMs = (x) => leftMs + ((x - VB.padL) / plotW) * (rightMs - leftMs);
+        const py = (p) => VB.padT + (1 - p / 10) * plotH;
+        const yToP = (y) => Math.max(0, Math.min(10, 10 * (1 - (y - VB.padT) / plotH)));
+
+        // Snap a millisecond timestamp to midnight of its local day, then ISO it.
+        const msToISO = (ms) => {
+          const d = new Date(ms);
+          d.setHours(12, 0, 0, 0); // noon to dodge DST edges
+          return toISO(d);
+        };
+
+        // Band fill rectangles (bottom up: Suppress, Low, Medium, High)
+        const bandFill = (top, bot, color, alpha) => {
+          const yTop = py(top);
+          const yBot = py(bot);
+          return { y: yTop, h: Math.max(0, yBot - yTop), color, alpha };
+        };
+        const bands = [
+          bandFill(10,  5.5, "#fee2e2", 0.55), // High
+          bandFill(5.5, 3.0, "#fef3c7", 0.55), // Medium
+          bandFill(3.0, 1.0, "#e0e7ff", 0.55), // Low
+        ];
+
+        // Today marker (within the window)
+        const todayMs = Date.now();
+        const showToday = todayMs >= leftMs && todayMs <= rightMs;
+        const todayX = showToday ? tx(todayMs) : null;
+
+        const sx = tx(sd.getTime()), syy = py(startPriority);
+        const px = tx(dd.getTime()),  ppy = py(peakPriority);
+
+        // Drag handler — `which` is 'start' or 'peak'
+        // (dragRef is declared up top alongside windowRef so the window-fit
+        // logic above can read it on render.)
+        // We read coords from the FIRST touch in either `touches` (touchstart/move)
+        // or `changedTouches` (touchend). On iOS the active touch list is empty
+        // by touchend, so changedTouches is the only place to find it.
+        const ptFromEvent = (e) => {
+          const rect = svgRef.current.getBoundingClientRect();
+          let clientX, clientY;
+          if (e.touches && e.touches.length > 0) {
+            clientX = e.touches[0].clientX; clientY = e.touches[0].clientY;
+          } else if (e.changedTouches && e.changedTouches.length > 0) {
+            clientX = e.changedTouches[0].clientX; clientY = e.changedTouches[0].clientY;
+          } else {
+            clientX = e.clientX; clientY = e.clientY;
+          }
+          return {
+            x: ((clientX - rect.left) / rect.width)  * VB.w,
+            y: ((clientY - rect.top)  / rect.height) * VB.h,
+          };
+        };
+        // Mouse-only fallback for the per-handle <g> elements (desktop testing).
+        // Touch path goes through native listeners on the SVG itself (see effect below).
+        const onDown = (which) => (e) => {
+          dragRef.current = which;
+          if (e.preventDefault) e.preventDefault();
+        };
+        // When dragging past the visible edge, slow the date change down by this
+        // factor so dates don't shoot out wildly as the window expands.
+        const EDGE_FRICTION = 0.25;
+
+        const onMove = (e) => {
+          if (!dragRef.current) return;
+          const p = ptFromEvent(e);
+          const v = yToP(p.y);
+          const snappedV = Math.round(v * 10) / 10;
+
+          // Compute the unconstrained target ms from the cursor.
+          let targetMs = xToMs(p.x);
+
+          if (dragRef.current === "start") {
+            // If pulling past the LEFT edge, dampen the rate of change.
+            if (targetMs < leftMs) {
+              const overshoot = leftMs - targetMs;
+              targetMs = leftMs - overshoot * EDGE_FRICTION;
+            }
+            const snappedDay = new Date(targetMs); snappedDay.setHours(12,0,0,0);
+            const snappedMs  = snappedDay.getTime();
+            // Don't let start go past peak day
+            const cap = Math.min(snappedMs, dd.getTime());
+            onChange({ startDate: msToISO(cap), startPriority: snappedV });
+          } else {
+            // If pushing past the RIGHT edge, dampen the rate of change.
+            if (targetMs > rightMs) {
+              const overshoot = targetMs - rightMs;
+              targetMs = rightMs + overshoot * EDGE_FRICTION;
+            }
+            const snappedDay = new Date(targetMs); snappedDay.setHours(12,0,0,0);
+            const snappedMs  = snappedDay.getTime();
+            // Don't let peak land before start day
+            const floor = Math.max(snappedMs, sd.getTime());
+            onChange({ dueDate: msToISO(floor), peakPriority: snappedV });
+          }
+          e.preventDefault();
+        };
+        const onUp = () => {
+          if (!dragRef.current) return;
+          dragRef.current = null;
+          // Trigger a refit so the window snaps back to fit the current dates,
+          // freeing the user from a stale wide view after dragging out and back.
+          setWindowEpoch((n) => n + 1);
+        };
+
+        // Native touch listeners on the SVG element itself.
+        // iOS Safari often drops React's synthetic onTouchStart on SVG <g>
+        // elements, so we hit-test which dot the touch landed near and start
+        // the drag from a real native event. `passive: false` is required so
+        // we can preventDefault and stop iOS from scrolling the page.
+        React.useEffect(() => {
+          const svg = svgRef.current;
+          if (!svg) return;
+
+          // Hit-test: figure out which dot the touch is closest to.
+          // Returns 'start', 'peak', or null (if touch is too far from either).
+          const HIT_RADIUS_VB = 26; // generous tap target in viewBox units
+          const pickDot = (touchPt) => {
+            const sxNow = tx(sd.getTime()), syNow = py(startPriority);
+            const pxNow = tx(dd.getTime()), ppyNow = py(peakPriority);
+            const dStart = Math.hypot(touchPt.x - sxNow, touchPt.y - syNow);
+            const dPeak  = Math.hypot(touchPt.x - pxNow, touchPt.y - ppyNow);
+            const closest = dStart < dPeak ? "start" : "peak";
+            const closestDist = Math.min(dStart, dPeak);
+            return closestDist <= HIT_RADIUS_VB ? closest : null;
+          };
+
+          const nativeTouchStart = (e) => {
+            const pt = ptFromEvent(e);
+            const which = pickDot(pt);
+            if (which) {
+              dragRef.current = which;
+              e.preventDefault();
+            }
+          };
+          const nativeTouchMove = (e) => {
+            if (!dragRef.current) return;
+            onMove(e);
+          };
+          const nativeTouchEnd = (e) => {
+            if (!dragRef.current) return;
+            onUp();
+            e.preventDefault();
+          };
+
+          svg.addEventListener("touchstart", nativeTouchStart, { passive: false });
+          svg.addEventListener("touchmove",  nativeTouchMove,  { passive: false });
+          svg.addEventListener("touchend",   nativeTouchEnd,   { passive: false });
+          svg.addEventListener("touchcancel", nativeTouchEnd,  { passive: false });
+
+          // Mouse listeners stay window-level so the cursor can leave the SVG mid-drag.
+          window.addEventListener("mousemove", onMove);
+          window.addEventListener("mouseup",   onUp);
+          return () => {
+            svg.removeEventListener("touchstart",  nativeTouchStart);
+            svg.removeEventListener("touchmove",   nativeTouchMove);
+            svg.removeEventListener("touchend",    nativeTouchEnd);
+            svg.removeEventListener("touchcancel", nativeTouchEnd);
+            window.removeEventListener("mousemove", onMove);
+            window.removeEventListener("mouseup",   onUp);
+          };
+        });
+
+        const fmtShort = (ms) => {
+          const d = new Date(ms);
+          return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        };
+
+        // Block ONLY touchmove from bubbling — that's what the parent card's
+        // swipe-reveal listens for. Letting touchstart/touchend through keeps
+        // the dot-grab and dot-release working normally on iOS Safari.
+        const stopMove = (e) => { e.stopPropagation(); };
+
+        return (
+          <div onTouchMove={stopMove}>
+            <svg
+              ref={svgRef}
+              viewBox={`0 0 ${VB.w} ${VB.h}`}
+              width="100%"
+              height="200"
+              style={{ display: "block", touchAction: "none", borderRadius: "10px", border: "1px solid #e2e8f0", background: "#fff" }}
+            >
+              {/* Band fills */}
+              {bands.map((b, i) => (
+                <rect key={i} x={VB.padL} y={b.y} width={plotW} height={b.h} fill={b.color} opacity={b.alpha} />
+              ))}
+              {/* Y-axis labels (band names, sentence-cased on the left) */}
+              <text x={4}  y={py(7.75) + 4} fontSize="10" fill="#b91c1c" fontWeight="700" fontFamily="Inter, sans-serif">High</text>
+              <text x={4}  y={py(4.25) + 4} fontSize="10" fill="#92400e" fontWeight="700" fontFamily="Inter, sans-serif">Med</text>
+              <text x={4}  y={py(2.0)  + 4} fontSize="10" fill="#3730a3" fontWeight="700" fontFamily="Inter, sans-serif">Low</text>
+              {/* Plot frame */}
+              <line x1={VB.padL} y1={VB.padT} x2={VB.padL} y2={VB.padT + plotH} stroke="#cbd5e1" strokeWidth="0.5" />
+              <line x1={VB.padL} y1={VB.padT + plotH} x2={VB.padL + plotW} y2={VB.padT + plotH} stroke="#cbd5e1" strokeWidth="0.5" />
+              {/* Today line */}
+              {showToday && (
+                <g>
+                  <line x1={todayX} y1={VB.padT} x2={todayX} y2={VB.padT + plotH} stroke="#dc2626" strokeWidth="1" strokeDasharray="3,3" opacity="0.55" />
+                  <text x={todayX} y={VB.padT + plotH + 14} fontSize="9" fill="#dc2626" textAnchor="middle" fontFamily="Inter, sans-serif">today</text>
+                </g>
+              )}
+              {/* Ramp line + fill */}
+              <polygon
+                points={`${sx},${py(0)} ${sx},${syy} ${px},${ppy} ${px},${py(0)}`}
+                fill="#3b82f6" opacity="0.10"
+              />
+              <line x1={sx} y1={syy} x2={px} y2={ppy} stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" />
+              {/* X-axis date labels at the two dots */}
+              <text x={sx} y={VB.padT + plotH + 22} fontSize="9" fill="#64748b" textAnchor="middle" fontFamily="Inter, sans-serif">{fmtShort(sd.getTime())}</text>
+              <text x={px} y={VB.padT + plotH + 22} fontSize="9" fill="#64748b" textAnchor="middle" fontFamily="Inter, sans-serif">{fmtShort(dd.getTime())}</text>
+              {/* Start handle */}
+              <g transform={`translate(${sx},${syy})`} style={{ cursor: "grab" }} onMouseDown={onDown("start")}>
+                <circle r="14" fill="#3b82f6" opacity="0.18" />
+                <circle r="9"  fill="#3b82f6" stroke="#fff" strokeWidth="2" />
+              </g>
+              {/* Peak handle */}
+              <g transform={`translate(${px},${ppy})`} style={{ cursor: "grab" }} onMouseDown={onDown("peak")}>
+                <circle r="14" fill="#1d4ed8" opacity="0.18" />
+                <circle r="9"  fill="#1d4ed8" stroke="#fff" strokeWidth="2" />
+              </g>
+            </svg>
+            <div style={{ marginTop: "8px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+              <div style={{ background: "#f8fafc", borderRadius: "8px", padding: "8px 10px" }}>
+                <div style={{ fontSize: "11px", color: "#64748b" }}>Start</div>
+                <div style={{ fontSize: "13px", fontWeight: "500" }}>{fmtShort(sd.getTime())} · {bandFromScore(startPriority)}</div>
+              </div>
+              <div style={{ background: "#f8fafc", borderRadius: "8px", padding: "8px 10px" }}>
+                <div style={{ fontSize: "11px", color: "#64748b" }}>Peak</div>
+                <div style={{ fontSize: "13px", fontWeight: "500" }}>{fmtShort(dd.getTime())} · {bandFromScore(peakPriority)}</div>
+              </div>
+            </div>
+          </div>
+        );
+      }
 
       /* ── Edit Form ── */
       function EditForm({ task, onSave, onCancel }) {
@@ -1154,10 +1435,21 @@
               <div><label style={labelStyle}>Start Date</label><input type="date" style={fieldStyle} value={startDate} onChange={e => setStartDate(e.target.value)} /></div>
               <div><label style={labelStyle}>Due Date</label><input type="date" style={fieldStyle} value={dueDate} onChange={e => setDueDate(e.target.value)} /></div>
             </div>
-            <label style={labelStyle}>Start Priority: {sp.toFixed(1)}</label>
-            <input type="range" min="0" max="10" step="0.5" value={sp} onChange={e => setSp(parseFloat(e.target.value))} style={{ marginTop: "6px" }} />
-            <label style={labelStyle}>Peak Priority: {pp.toFixed(1)}</label>
-            <input type="range" min="0" max="10" step="0.5" value={pp} onChange={e => setPp(parseFloat(e.target.value))} style={{ marginTop: "6px" }} />
+            <label style={labelStyle}>Priority — drag dots to adjust</label>
+            <div style={{ marginTop: "6px" }}>
+              <PriorityGraph
+                startDate={startDate}
+                dueDate={dueDate}
+                startPriority={sp}
+                peakPriority={pp}
+                onChange={(next) => {
+                  if (next.startPriority !== undefined) setSp(next.startPriority);
+                  if (next.peakPriority  !== undefined) setPp(next.peakPriority);
+                  if (next.startDate)                 setStartDate(next.startDate);
+                  if (next.dueDate)                   setDueDate(next.dueDate);
+                }}
+              />
+            </div>
             <label style={labelStyle}>Snooze Until</label>
             <input type="date" style={fieldStyle} value={postpone} onChange={e => setPostpone(e.target.value)} />
             <div style={{ display: "flex", gap: "10px", marginTop: "16px" }}>
