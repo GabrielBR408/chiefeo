@@ -406,7 +406,7 @@
           } else {
             const { data, error } = await sb.auth.signInWithPassword({ email, password });
             if (error) throw error;
-            onAuth(data.user, password);
+            onAuth(data.user, password, data.session);
           }
         } catch (err) {
           setError(err.message || "Something went wrong");
@@ -484,6 +484,24 @@
     function getSavedCredential(email) {
       try { return sessionStorage.getItem("chiefeo_cred_" + email); } catch(e) { return null; }
     }
+    function saveSessionTokens(email, session) {
+      try {
+        localStorage.setItem("chiefeo_session_" + email, JSON.stringify({
+          access_token:  session.access_token,
+          refresh_token: session.refresh_token,
+          saved_at: Date.now()
+        }));
+      } catch(e) {}
+    }
+    function getSavedSessionTokens(email) {
+      try {
+        const raw = localStorage.getItem("chiefeo_session_" + email);
+        return raw ? JSON.parse(raw) : null;
+      } catch(e) { return null; }
+    }
+    function clearSessionTokens(email) {
+      try { localStorage.removeItem("chiefeo_session_" + email); } catch(e) {}
+    }
 
     function App() {
       const [user, setUser]             = useState(null);
@@ -500,6 +518,9 @@
         });
         const { data: { subscription } } = sb.auth.onAuthStateChange((_event, session) => {
           setUser(session?.user ?? null);
+          if (session?.user?.email && ACCOUNT_EMAILS.includes(session.user.email)) {
+            saveSessionTokens(session.user.email, session);
+          }
         });
         return () => subscription.unsubscribe();
       }, []);
@@ -519,17 +540,39 @@
       const doSwitch = async (email, password) => {
         setSwitching(false);
         const sb = getSupabase();
-        await sb.auth.signOut();
+
+        // Try saved refresh token first — no signOut needed
+        const tokens = getSavedSessionTokens(email);
+        if (tokens?.refresh_token) {
+          const { data, error } = await sb.auth.setSession({
+            access_token:  tokens.access_token,
+            refresh_token: tokens.refresh_token
+          });
+          if (!error && data.session) {
+            saveSessionTokens(email, data.session);
+            setUser(data.user);
+            return;
+          }
+          // Token refresh failed (likely expired) — wipe it and fall through
+          clearSessionTokens(email);
+        }
+
+        // Fallback: password path
+        if (!password) { setSwitching(email); return; }
         const { data, error } = await sb.auth.signInWithPassword({ email, password });
         if (error) { setSwitchError("Wrong password for " + email); return; }
         saveCredentials(email, password);
+        saveSessionTokens(email, data.session);
         setUser(data.user);
       };
 
-      // ── Handle auth (saves credentials for known accounts) ──────
-      const handleAuth = (user, password) => {
+      // ── Handle auth (saves credentials + tokens for known accounts) ──
+      const handleAuth = (user, password, session) => {
         if (password && ACCOUNT_EMAILS.includes(user.email)) {
           saveCredentials(user.email, password);
+        }
+        if (session && ACCOUNT_EMAILS.includes(user.email)) {
+          saveSessionTokens(user.email, session);
         }
         setUser(user);
       };
@@ -550,7 +593,7 @@
         return <PasswordPrompt account={acct} onSubmit={(pw) => doSwitch(switching, pw)} onCancel={() => setSwitching(false)} error={switchError} />;
       }
 
-      return <TaskApp user={user} onSignOut={() => { getSupabase().auth.signOut(); }} switchAccount={switchAccount} switchError={switchError} />;
+      return <TaskApp user={user} onSignOut={() => { clearSessionTokens(user.email); getSupabase().auth.signOut(); }} switchAccount={switchAccount} switchError={switchError} />;
     }
 
     /* ── Password prompt screen (shown when switching to uncached account) ── */
@@ -854,6 +897,11 @@
         const [bouncing, setBouncing] = React.useState(false);
         const isSwipeOpen = swipeOpenId === task.id;
 
+        // When another card becomes the open one (or nothing is open), force this card closed.
+        React.useEffect(() => {
+          if (swipeOpenId !== task.id && swipeDx !== 0) setSwipeDx(0);
+        }, [swipeOpenId, task.id]);
+
         // Right-reveal width (Edit button) and left-reveal width (Done/Snooze/Trash)
         const LEFT_BTN_W = 80;   // edit button
         const RIGHT_BTN_W = 220; // 3 buttons × ~70px + gaps
@@ -916,8 +964,8 @@
           const isTap = Math.abs(dx) < 40;
 
           if (ref.direction === "vertical" || isTap) {
-            // Treat as tap — if card is open close it, else let onClick fire
-            if (isSwipeOpen) { snapClose(); return; }
+            // Treat as tap — if card is open OR visually offset, force close
+            if (isSwipeOpen || swipeDx !== 0) { snapClose(); return; }
             // onClick will fire naturally
             return;
           }
@@ -1010,7 +1058,7 @@
               onTouchMove={onTouchMove}
               onTouchEnd={onTouchEnd}
             >
-              <div style={S.cardInner} onClick={() => { if (isSwipeOpen) { snapClose(); return; } toggleExpand(task.id); }}>
+              <div style={S.cardInner} onClick={() => { if (isSwipeOpen || swipeDx !== 0) { snapClose(); return; } toggleExpand(task.id); }}>
                 {task.complete ? (
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f0fdf4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#22c55e" }}><CheckIcon /></div>
                 ) : (
@@ -1252,11 +1300,6 @@
                     </div>);
                   })}
                 </div>
-              </div>
-              <div style={{ ...cardStyle, background: "#eff6ff", border: "1px solid #bfdbfe" }}>
-                <div style={{ fontSize: "15px", fontWeight: "700", color: "#1e40af", marginBottom: "4px" }}>How tiers combine</div>
-                <div style={{ fontSize: "12px", color: "#1e40af", lineHeight: 1.5 }}>When both sender and keyword match, the final tier is pulled <b>halfway</b> between the two — so a keyword can <b>boost or suppress</b> a sender's default by 50%.</div>
-                <div style={{ fontSize: "11px", color: "#3730a3", marginTop: "8px", fontFamily: "ui-monospace, monospace", background: "#fff", padding: "6px 8px", borderRadius: "6px" }}>final = sender + (keyword − sender) × 0.5</div>
               </div>
               <div style={cardStyle}>
                 <div style={sectionTitle}>Account</div>
