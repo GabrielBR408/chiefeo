@@ -1218,15 +1218,29 @@
         // Drag handler — `which` is 'start' or 'peak'
         // (dragRef is declared up top alongside windowRef so the window-fit
         // logic above can read it on render.)
+        // We read coords from the FIRST touch in either `touches` (touchstart/move)
+        // or `changedTouches` (touchend). On iOS the active touch list is empty
+        // by touchend, so changedTouches is the only place to find it.
         const ptFromEvent = (e) => {
           const rect = svgRef.current.getBoundingClientRect();
-          const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
-          const cy = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
-          return { x: (cx / rect.width) * VB.w, y: (cy / rect.height) * VB.h };
+          let clientX, clientY;
+          if (e.touches && e.touches.length > 0) {
+            clientX = e.touches[0].clientX; clientY = e.touches[0].clientY;
+          } else if (e.changedTouches && e.changedTouches.length > 0) {
+            clientX = e.changedTouches[0].clientX; clientY = e.changedTouches[0].clientY;
+          } else {
+            clientX = e.clientX; clientY = e.clientY;
+          }
+          return {
+            x: ((clientX - rect.left) / rect.width)  * VB.w,
+            y: ((clientY - rect.top)  / rect.height) * VB.h,
+          };
         };
+        // Mouse-only fallback for the per-handle <g> elements (desktop testing).
+        // Touch path goes through native listeners on the SVG itself (see effect below).
         const onDown = (which) => (e) => {
           dragRef.current = which;
-          e.preventDefault();
+          if (e.preventDefault) e.preventDefault();
         };
         // When dragging past the visible edge, slow the date change down by this
         // factor so dates don't shoot out wildly as the window expands.
@@ -1273,16 +1287,62 @@
           // freeing the user from a stale wide view after dragging out and back.
           setWindowEpoch((n) => n + 1);
         };
+
+        // Native touch listeners on the SVG element itself.
+        // iOS Safari often drops React's synthetic onTouchStart on SVG <g>
+        // elements, so we hit-test which dot the touch landed near and start
+        // the drag from a real native event. `passive: false` is required so
+        // we can preventDefault and stop iOS from scrolling the page.
         React.useEffect(() => {
+          const svg = svgRef.current;
+          if (!svg) return;
+
+          // Hit-test: figure out which dot the touch is closest to.
+          // Returns 'start', 'peak', or null (if touch is too far from either).
+          const HIT_RADIUS_VB = 26; // generous tap target in viewBox units
+          const pickDot = (touchPt) => {
+            const sxNow = tx(sd.getTime()), syNow = py(startPriority);
+            const pxNow = tx(dd.getTime()), ppyNow = py(peakPriority);
+            const dStart = Math.hypot(touchPt.x - sxNow, touchPt.y - syNow);
+            const dPeak  = Math.hypot(touchPt.x - pxNow, touchPt.y - ppyNow);
+            const closest = dStart < dPeak ? "start" : "peak";
+            const closestDist = Math.min(dStart, dPeak);
+            return closestDist <= HIT_RADIUS_VB ? closest : null;
+          };
+
+          const nativeTouchStart = (e) => {
+            const pt = ptFromEvent(e);
+            const which = pickDot(pt);
+            if (which) {
+              dragRef.current = which;
+              e.preventDefault();
+            }
+          };
+          const nativeTouchMove = (e) => {
+            if (!dragRef.current) return;
+            onMove(e);
+          };
+          const nativeTouchEnd = (e) => {
+            if (!dragRef.current) return;
+            onUp();
+            e.preventDefault();
+          };
+
+          svg.addEventListener("touchstart", nativeTouchStart, { passive: false });
+          svg.addEventListener("touchmove",  nativeTouchMove,  { passive: false });
+          svg.addEventListener("touchend",   nativeTouchEnd,   { passive: false });
+          svg.addEventListener("touchcancel", nativeTouchEnd,  { passive: false });
+
+          // Mouse listeners stay window-level so the cursor can leave the SVG mid-drag.
           window.addEventListener("mousemove", onMove);
-          window.addEventListener("touchmove", onMove, { passive: false });
-          window.addEventListener("mouseup", onUp);
-          window.addEventListener("touchend", onUp);
+          window.addEventListener("mouseup",   onUp);
           return () => {
+            svg.removeEventListener("touchstart",  nativeTouchStart);
+            svg.removeEventListener("touchmove",   nativeTouchMove);
+            svg.removeEventListener("touchend",    nativeTouchEnd);
+            svg.removeEventListener("touchcancel", nativeTouchEnd);
             window.removeEventListener("mousemove", onMove);
-            window.removeEventListener("touchmove", onMove);
-            window.removeEventListener("mouseup", onUp);
-            window.removeEventListener("touchend", onUp);
+            window.removeEventListener("mouseup",   onUp);
           };
         });
 
@@ -1333,12 +1393,12 @@
               <text x={sx} y={VB.padT + plotH + 22} fontSize="9" fill="#64748b" textAnchor="middle" fontFamily="Inter, sans-serif">{fmtShort(sd.getTime())}</text>
               <text x={px} y={VB.padT + plotH + 22} fontSize="9" fill="#64748b" textAnchor="middle" fontFamily="Inter, sans-serif">{fmtShort(dd.getTime())}</text>
               {/* Start handle */}
-              <g transform={`translate(${sx},${syy})`} style={{ cursor: "grab" }} onMouseDown={onDown("start")} onTouchStart={onDown("start")}>
+              <g transform={`translate(${sx},${syy})`} style={{ cursor: "grab" }} onMouseDown={onDown("start")}>
                 <circle r="14" fill="#3b82f6" opacity="0.18" />
                 <circle r="9"  fill="#3b82f6" stroke="#fff" strokeWidth="2" />
               </g>
               {/* Peak handle */}
-              <g transform={`translate(${px},${ppy})`} style={{ cursor: "grab" }} onMouseDown={onDown("peak")} onTouchStart={onDown("peak")}>
+              <g transform={`translate(${px},${ppy})`} style={{ cursor: "grab" }} onMouseDown={onDown("peak")}>
                 <circle r="14" fill="#1d4ed8" opacity="0.18" />
                 <circle r="9"  fill="#1d4ed8" stroke="#fff" strokeWidth="2" />
               </g>
