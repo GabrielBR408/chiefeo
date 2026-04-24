@@ -632,6 +632,22 @@
       const [snoozeTarget, setSnoozeTarget] = useState(null);
       const [editTarget, setEditTarget] = useState(null);
       const [swipeOpenId, setSwipeOpenId] = useState(null);
+
+      // Safety net for iOS touch-cancel: if the tab loses focus, or a scroll gesture
+      // is cancelled system-wide, force the open card closed so it never strands.
+      useEffect(() => {
+        if (!swipeOpenId) return;
+        const forceClose = () => setSwipeOpenId(null);
+        window.addEventListener("blur", forceClose);
+        document.addEventListener("visibilitychange", forceClose);
+        window.addEventListener("touchcancel", forceClose);
+        return () => {
+          window.removeEventListener("blur", forceClose);
+          document.removeEventListener("visibilitychange", forceClose);
+          window.removeEventListener("touchcancel", forceClose);
+        };
+      }, [swipeOpenId]);
+
       const [showSwitcher, setShowSwitcher] = useState(false);
       const [menuOpen, setMenuOpen]     = useState(false);
       const [showAddForm, setShowAddForm] = useState(false);
@@ -902,6 +918,14 @@
           if (swipeOpenId !== task.id && swipeDx !== 0) setSwipeDx(0);
         }, [swipeOpenId, task.id]);
 
+        // Belt-and-suspenders: on unmount or if this card re-renders with a stale non-zero swipeDx
+        // while not the open card, snap it closed. Runs every render so it always converges.
+        React.useEffect(() => {
+          if (!isSwipeOpen && swipeDx !== 0 && !swipeRef.current.decided) {
+            setSwipeDx(0);
+          }
+        });
+
         // Right-reveal width (Edit button) and left-reveal width (Done/Snooze/Trash)
         const LEFT_BTN_W = 80;   // edit button
         const RIGHT_BTN_W = 220; // 3 buttons × ~70px + gaps
@@ -978,6 +1002,17 @@
           } else if (isSwipeRight) {
             if (Math.abs(dx) > 80) { snapOpen("right"); } else { snapClose(); }
           }
+        };
+
+        // iOS Safari can cancel a touch mid-gesture (notification, edge-swipe, pull-to-refresh).
+        // Without this handler the card gets stranded at whatever swipeDx was last set to.
+        const onTouchCancel = () => {
+          const ref = swipeRef.current;
+          const dx = ref.dx;
+          if (ref.direction === "vertical" || Math.abs(dx) < 40) { snapClose(); return; }
+          // Partial swipe that was cancelled — commit based on threshold
+          if (Math.abs(dx) > 80) { snapOpen(dx < 0 ? "left" : "right"); }
+          else { snapClose(); }
         };
 
         // Determine if this card is currently open to the right (edit) or left (actions)
@@ -1057,6 +1092,7 @@
               onTouchStart={onTouchStart}
               onTouchMove={onTouchMove}
               onTouchEnd={onTouchEnd}
+              onTouchCancel={onTouchCancel}
             >
               <div style={S.cardInner} onClick={() => { if (isSwipeOpen || swipeDx !== 0) { snapClose(); return; } toggleExpand(task.id); }}>
                 {task.complete ? (
