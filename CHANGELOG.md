@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LICENSE` file declaring proprietary, all-rights-reserved terms under Golden Real Estate Ventures and Exchanges LLC.
 - Web App Manifest at `public/manifest.json` declaring ChiefEO as a standalone PWA (theme color `#3b82f6`, background `#f8fafc`, start URL `/`).
 - Placeholder icon set under `public/icons/` (16, 32, 180, 192, 512 px) — a blue rounded-square with white "CE" wordmark — wired up via `<link rel="manifest">`, `<link rel="apple-touch-icon">`, favicon `<link>`s, and the iOS-specific `apple-mobile-web-app-capable` / `apple-mobile-web-app-status-bar-style` / `theme-color` meta tags so the app installs cleanly to home screens on iOS and Android.
+- Service worker (`public/sw.js`, cache `chiefeo-v1`) registered from `index.html` on `window.load`. Pre-caches the HTML shell (`/`, `/index.html`, `/manifest.json`, `/icons/icon-192.png`) on install. Uses cache-first for shell/static asset requests and network-first with cache fallback for any `*.supabase.co` host so the UI stays usable offline while live Supabase reads/writes always prefer the network when reachable. An `activate` handler purges any cache key other than the current `CACHE` constant on version bumps.
 
 ### Changed
 - Sanitized `console.error` calls to log only `e?.message` and `e?.code` instead of full error objects, reducing the risk of accidentally surfacing network metadata or sensitive fields in browser DevTools.
