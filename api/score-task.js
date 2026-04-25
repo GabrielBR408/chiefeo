@@ -187,11 +187,15 @@ async function loadPriorities(userId, supabaseUrl, serviceKey) {
         },
       }
     );
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      console.error("score-task priorities fetch failed:", resp.status);
+      return null;
+    }
     const rows = await resp.json();
     if (rows.length === 0) return null;
     return rows[0].config || {};
-  } catch {
+  } catch (e) {
+    console.error("score-task priorities fetch error:", e?.message);
     return null;
   }
 }
@@ -254,8 +258,9 @@ export default async function handler(req, res) {
   }
 
   // Auth: Bearer (browser) takes precedence over x-api-key (skill).
+  // Vercel/Node lowercases incoming header names, so we only look at "authorization".
   let resolved = null;
-  const authHeader = req.headers["authorization"] || req.headers["Authorization"];
+  const authHeader = req.headers["authorization"];
   if (authHeader && /^Bearer\s+/i.test(authHeader)) {
     const token = authHeader.replace(/^Bearer\s+/i, "").trim();
     resolved = await resolveUserFromBearer(token, SUPABASE_URL, SUPABASE_KEY);
