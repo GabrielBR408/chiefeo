@@ -241,15 +241,13 @@
       return "active";
     }
 
-    /* ══════════════ V4 Tier Scoring ══════════════ */
-    /* Band boundaries — match TIER_TO_PRIORITY ranges below.
-       Score >= 5.5 = High, 3.0-5.5 = Medium, 1.0-3.0 = Low, < 1.0 = Suppress. */
-    const TIER_TO_PRIORITY = {
-      "High":     { start: 5.5, peak: 8.5 },
-      "Medium":   { start: 3.0, peak: 5.5 },
-      "Low":      { start: 1.0, peak: 3.0 },
-      "Suppress": { start: 0.0, peak: 1.0 },
-    };
+    /* ══════════════ V4 Tier Display ══════════════
+       Tier-to-priority mappings live server-side (default in /api/score-task,
+       optional override in the user's priorities config under the
+       `tierMappings` key — see the API for the JSON shape). The boundaries
+       below are the *display* bands used to color a score badge; users who
+       customize their server-side mappings may see a one-band visual drift on
+       extreme overrides. The actual ranking math is unaffected. */
     const TIER_COLOR = {
       "High":     { bg: "#fee2e2", fg: "#b91c1c", border: "#fca5a5" },
       "Medium":   { bg: "#fef3c7", fg: "#92400e", border: "#fcd34d" },
