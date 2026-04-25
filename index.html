@@ -691,7 +691,7 @@
             setTasks(loaded);
           } catch (e) {
             showToast("Failed to load tasks");
-            console.error(e);
+            console.error("Tasks load failed:", e?.message, e?.code);
           } finally {
             setLoading(false);
           }
@@ -708,7 +708,7 @@
               setPriorities(config);
             }
           } catch (e) {
-            console.error("Priorities load failed:", e);
+            console.error("Priorities load failed:", e?.message, e?.code);
           }
         })();
       }, [user.id]);
@@ -721,7 +721,7 @@
           try {
             await dbSavePriorities(priorities, user.id);
           } catch (e) {
-            console.error("Priorities save failed:", e);
+            console.error("Priorities save failed:", e?.message, e?.code);
           }
         }, 800);
         return () => { if (prioritiesSaveTimerRef.current) clearTimeout(prioritiesSaveTimerRef.current); };
@@ -740,7 +740,7 @@
           setSyncStatus("error");
           setSyncError(e.message);
           showToast("Save failed — check connection");
-          console.error(e);
+          console.error("Task update failed:", e?.message, e?.code);
         }
       }, [user.id]);
 
@@ -775,7 +775,7 @@
           setSyncStatus("error");
           setSyncError(e.message);
           showToast("Add failed — check connection");
-          console.error(e);
+          console.error("Task insert failed:", e?.message, e?.code);
         }
       }, [user.id, priorities]);
 
