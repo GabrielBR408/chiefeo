@@ -359,9 +359,6 @@
     function TrashIcon() {
       return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>);
     }
-    function CopyIcon() {
-      return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>);
-    }
     function MenuIcon() {
       return (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>);
     }
@@ -628,7 +625,6 @@
       const [tab, setTab]               = useState("active");
       const [expandedId, setExpandedId] = useState(null);
       const [snoozeTarget, setSnoozeTarget] = useState(null);
-      const [editTarget, setEditTarget] = useState(null);
       const [swipeOpenId, setSwipeOpenId] = useState(null);
 
       // Safety net for iOS touch-cancel: if the tab loses focus, or a scroll gesture
@@ -839,7 +835,7 @@
       const filterCount = summaryFilter === "overdue" ? overdueCount : summaryFilter === "dueToday" ? dueTodayCount : summaryFilter === "thisWeek" ? thisWeekCount : 0;
       const toggleFilter = (f) => setSummaryFilter(prev => prev === f ? null : f);
 
-      const toggleExpand = (id) => { setExpandedId(prev => prev === id ? null : id); setEditTarget(null); setSnoozeTarget(null); };
+      const toggleExpand = (id) => { setExpandedId(prev => prev === id ? null : id); setSnoozeTarget(null); };
 
       /* ── Styles ── */
       const S = {
@@ -863,11 +859,6 @@
         dueLabel: (status) => ({ fontSize: "11px", fontWeight: "600", color: status === "overdue" ? "#ef4444" : status === "active" ? "#f59e0b" : "#94a3b8", marginTop: "3px" }),
         snoozeBadge: { display: "inline-block", fontSize: "10px", fontWeight: "600", color: "#a78bfa", background: "#f5f3ff", borderRadius: "6px", padding: "2px 7px", marginTop: "4px" },
         expandArea: { padding: "0 14px 14px 14px", borderTop: "1px solid #f1f5f9" },
-        detailGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "14px", marginTop: "12px" },
-        detailLabel: { fontSize: "11px", color: "#94a3b8", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.3px" },
-        detailValue: { fontSize: "13px", color: "#334155", fontWeight: "500", marginTop: "2px" },
-        actionRow: { display: "flex", gap: "8px" },
-        actionBtn: (bg, color) => ({ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "4px", padding: "10px 6px", borderRadius: "10px", border: "none", background: bg, color, fontSize: "11px", fontWeight: "600", cursor: "pointer" }),
         tabBar: { position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: "430px", background: "#fff", borderTop: "1px solid #e2e8f0", display: "flex", paddingBottom: "22px", zIndex: 100 },
         tabItem: (active) => ({ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "3px", padding: "10px 0 4px 0", background: "none", border: "none", cursor: "pointer", color: active ? "#3b82f6" : "#94a3b8", fontSize: "11px", fontWeight: "600" }),
         quickAddBar: { position: "fixed", bottom: "73px", left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: "430px", background: "#fff", padding: "8px 16px", display: "flex", gap: "10px", alignItems: "center", borderTop: "1px solid #f1f5f9", zIndex: 99 },
@@ -898,17 +889,19 @@
         else if (daysLeft <= 7) { dueText = daysLeft + "d left"; dueStatus = "active"; }
         else { dueText = daysLeft + "d left"; dueStatus = "gray"; }
 
-        const fallbackCopy = (text) => {
-          const ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.top = "0"; ta.style.left = "0"; ta.style.opacity = "0";
-          document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
-          let ok = false; try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
-          document.body.removeChild(ta); return ok;
-        };
-
         /* ── Swipe gesture state ── */
         const swipeRef = React.useRef({ startX: 0, startY: 0, startTime: 0, dx: 0, dy: 0, decided: false, direction: null });
         const [swipeDx, setSwipeDx] = React.useState(0);
         const [bouncing, setBouncing] = React.useState(false);
+        // Slide-out exit animation for Done/Trash from the expanded panel.
+        // Values: null | "done" | "trash". When set, slideStyle below
+        // animates the card off-screen before the task state actually changes.
+        const [exiting, setExiting] = React.useState(null);
+        // Local copy of task.name so typing doesn't round-trip through the
+        // global tasks state on every keystroke. Synced if task.name changes
+        // externally (e.g. from another tab via realtime sync).
+        const [editName, setEditName] = React.useState(task.name);
+        React.useEffect(() => { setEditName(task.name); }, [task.name]);
         const isSwipeOpen = swipeOpenId === task.id;
 
         // When another card becomes the open one (or nothing is open), force this card closed.
@@ -942,7 +935,7 @@
           if (action === "done") { updateTask(task.id, { complete: true }); setExpandedId(null); showToast("Done!"); }
           else if (action === "snooze") { setSnoozeTarget(task.id); }
           else if (action === "trash") { updateTask(task.id, { trashed: true }); setExpandedId(null); showToast("Trashed"); }
-          else if (action === "edit") { setExpandedId(task.id); setEditTarget(task.id); }
+          else if (action === "edit") { setExpandedId(task.id); }
         };
 
         const onTouchStart = (e) => {
@@ -1032,10 +1025,16 @@
         // (positioned absolutely behind this layer) are not visible through
         // the card. The overdue tint below is the opaque equivalent of
         // blending rgba(239,68,68,0.04) over white.
+        const exitTransform = exiting === "done"  ? "translateX(-110%)"
+                            : exiting === "trash" ? "translateX(110%)"
+                            : `translateX(${swipeDx}px)`;
         const slideStyle = {
-          transform: `translateX(${swipeDx}px)`,
-          transition: swipeRef.current.decided && swipeRef.current.direction !== "vertical" ? "none" : "transform 0.3s cubic-bezier(0.34,1.56,0.64,1)",
-          willChange: "transform",
+          transform: exitTransform,
+          transition: exiting
+            ? "transform 280ms ease-in, opacity 280ms ease-in"
+            : (swipeRef.current.decided && swipeRef.current.direction !== "vertical" ? "none" : "transform 0.3s cubic-bezier(0.34,1.56,0.64,1)"),
+          opacity: exiting ? 0 : 1,
+          willChange: "transform, opacity",
           position: "relative",
           zIndex: 1,
           background: status === "overdue" ? "#fef8f8" : "#fff",
@@ -1105,7 +1104,17 @@
                   <div style={S.scoreBadge(score)}>{TIER_LABEL_SHORT[bandFromScore(score)]}</div>
                 )}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={S.taskName(task.complete)}>{task.name}</div>
+                  {isExpanded ? (
+                    <input
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onBlur={() => { const next = editName.trim(); if (next && next !== task.name) updateTask(task.id, { name: next }); else if (!next) setEditName(task.name); }}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ width: "100%", fontSize: "15px", fontWeight: "500", color: "#1e293b", lineHeight: "1.3", border: "none", outline: "none", padding: "2px 0", background: "transparent", fontFamily: "Inter, sans-serif" }}
+                    />
+                  ) : (
+                    <div style={S.taskName(task.complete)}>{task.name}</div>
+                  )}
                   {dueText && <div style={S.dueLabel(dueStatus)}>{dueText}</div>}
                   {status === "snoozed" && task.postponeUntil && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
                   {status !== "snoozed" && task.postponeUntil && !task.complete && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
@@ -1114,25 +1123,26 @@
               </div>
               {isExpanded && (
                 <div style={{ ...S.expandArea, ...innerStyle }}>
-                  {editTarget === task.id ? (
-                    <EditForm task={task} onSave={(changes) => { updateTask(task.id, changes); setEditTarget(null); showToast("Saved"); }} onCancel={() => setEditTarget(null)} />
-                  ) : (
-                    <React.Fragment>
-                      <div style={S.detailGrid}>
-                        <div><div style={S.detailLabel}>Start Date</div><div style={S.detailValue}>{fmtFull(task.startDate)}</div></div>
-                        <div><div style={S.detailLabel}>Due Date</div><div style={S.detailValue}>{fmtFull(task.dueDate)}</div></div>
-                        <div><div style={S.detailLabel}>Starts in</div><div style={S.detailValue}>{bandFromScore(task.startPriority)}</div></div>
-                        <div><div style={S.detailLabel}>Peaks in</div><div style={S.detailValue}>{bandFromScore(task.peakPriority)}</div></div>
-                      </div>
-                      <div style={S.actionRow}>
-                        <button style={S.actionBtn("#f0fdf4", "#22c55e")} onClick={(e) => { e.stopPropagation(); updateTask(task.id, { complete: true }); setExpandedId(null); showToast("Done!"); }}><CheckIcon /> Done</button>
-                        <button style={S.actionBtn("#f5f3ff", "#a78bfa")} onClick={(e) => { e.stopPropagation(); setSnoozeTarget(task.id); }}><SnoozeIcon /> Snooze</button>
-                        <button style={S.actionBtn("#eff6ff", "#3b82f6")} onClick={(e) => { e.stopPropagation(); setEditTarget(task.id); }}><EditIcon /> Edit</button>
-                        <button style={S.actionBtn("#fffbeb", "#d97706")} title="Copy task name" onClick={async (e) => { e.stopPropagation(); const text = task.name || ""; try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); showToast("Name copied"); } else if (fallbackCopy(text)) { showToast("Name copied"); } else { showToast("Copy failed"); } } catch (err) { fallbackCopy(text) ? showToast("Name copied") : showToast("Copy failed"); } }}><CopyIcon /> Copy</button>
-                        <button style={S.actionBtn("#fef2f2", "#ef4444")} onClick={(e) => { e.stopPropagation(); updateTask(task.id, { trashed: true }); setExpandedId(null); showToast("Trashed"); }}><TrashIcon /> Trash</button>
-                      </div>
-                    </React.Fragment>
-                  )}
+                  <EditForm
+                    task={task}
+                    onTaskChange={(changes) => updateTask(task.id, changes)}
+                    onDone={() => {
+                      setExiting("done");
+                      setTimeout(() => {
+                        updateTask(task.id, { complete: true });
+                        setExpandedId(null);
+                        showToast("Done!");
+                      }, 280);
+                    }}
+                    onTrash={() => {
+                      setExiting("trash");
+                      setTimeout(() => {
+                        updateTask(task.id, { trashed: true });
+                        setExpandedId(null);
+                        showToast("Trashed");
+                      }, 280);
+                    }}
+                  />
                 </div>
               )}
             </div>
@@ -1147,7 +1157,7 @@
          vertically changes priority; dragging horizontally changes the date.
          All four values are continuous under the hood — bands are just visual.
       */
-      function PriorityGraph({ startDate, dueDate, startPriority, peakPriority, onChange }) {
+      function PriorityGraph({ startDate, dueDate, startPriority, peakPriority, onChange, onCommit }) {
         const svgRef = React.useRef(null);
         // Layout
         const VB = { w: 340, h: 200, padL: 36, padR: 14, padT: 10, padB: 26 };
@@ -1292,6 +1302,7 @@
           // Trigger a refit so the window snaps back to fit the current dates,
           // freeing the user from a stale wide view after dragging out and back.
           setWindowEpoch((n) => n + 1);
+          if (onCommit) onCommit();
         };
 
         // Native touch listeners on the SVG element itself.
@@ -1424,19 +1435,35 @@
       }
 
       /* ── Edit Form ── */
-      function EditForm({ task, onSave, onCancel }) {
-        const [name, setName]         = useState(task.name);
+      function EditForm({ task, onTaskChange, onDone, onTrash }) {
+        // Local state mirrors task fields so we can render input changes
+        // smoothly. onTaskChange is called when a value should be persisted:
+        // - immediately on date pickers (one event per pick)
+        // - on graph drag-end (via onCommit) to avoid a write per pixel
         const [startDate, setStartDate] = useState(toISO(task.startDate));
-        const [dueDate, setDueDate]   = useState(toISO(task.dueDate));
-        const [sp, setSp]             = useState(task.startPriority);
-        const [pp, setPp]             = useState(task.peakPriority);
-        const [postpone, setPostpone] = useState(task.postponeUntil ? toISO(task.postponeUntil) : "");
+        const [dueDate, setDueDate]     = useState(toISO(task.dueDate));
+        const [sp, setSp]               = useState(task.startPriority);
+        const [pp, setPp]               = useState(task.peakPriority);
+        const [postpone, setPostpone]   = useState(task.postponeUntil ? toISO(task.postponeUntil) : "");
+
         const fieldStyle = { width: "100%", padding: "10px 12px", borderRadius: "10px", border: "1px solid #e2e8f0", fontSize: "14px", fontFamily: "Inter, sans-serif", outline: "none", marginTop: "4px" };
         const labelStyle = { fontSize: "12px", color: "#64748b", fontWeight: "600", display: "block", marginTop: "12px" };
+
+        const handleStartDate = (next) => { setStartDate(next); onTaskChange({ startDate: next }); };
+        const handleDueDate   = (next) => { setDueDate(next);   onTaskChange({ dueDate: next });   };
+        const handlePostpone  = (next) => { setPostpone(next);  onTaskChange({ postponeUntil: next || null }); };
+        const handleGraphChange = (next) => {
+          if (next.startPriority !== undefined) setSp(next.startPriority);
+          if (next.peakPriority  !== undefined) setPp(next.peakPriority);
+          if (next.startDate)                    setStartDate(next.startDate);
+          if (next.dueDate)                      setDueDate(next.dueDate);
+        };
+        const handleGraphCommit = () => {
+          onTaskChange({ startDate, dueDate, startPriority: sp, peakPriority: pp });
+        };
+
         return (
           <div style={{ padding: "8px 0" }} onClick={(e) => e.stopPropagation()}>
-            <label style={labelStyle}>Task Name</label>
-            <input style={fieldStyle} value={name} onChange={e => setName(e.target.value)} />
             {/* Native <input type="date"> is rendered by the browser/OS in a
                 fixed locale format (e.g. "Apr 20, 2026" on iOS). To show our
                 "Monday, Apr 20" format, overlay our own text on top of a
@@ -1448,7 +1475,7 @@
                   <div style={{ ...fieldStyle, marginTop: 0, background: "#fff", color: startDate ? "#1e293b" : "#94a3b8" }}>
                     {startDate ? fmtFull(startDate) : "Pick a date"}
                   </div>
-                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, border: "none", padding: 0, margin: 0, cursor: "pointer", fontSize: "16px", fontFamily: "Inter, sans-serif" }} />
+                  <input type="date" value={startDate} onChange={e => handleStartDate(e.target.value)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, border: "none", padding: 0, margin: 0, cursor: "pointer", fontSize: "16px", fontFamily: "Inter, sans-serif" }} />
                 </div>
               </div>
               <div>
@@ -1457,7 +1484,7 @@
                   <div style={{ ...fieldStyle, marginTop: 0, background: "#fff", color: dueDate ? "#1e293b" : "#94a3b8" }}>
                     {dueDate ? fmtFull(dueDate) : "Pick a date"}
                   </div>
-                  <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, border: "none", padding: 0, margin: 0, cursor: "pointer", fontSize: "16px", fontFamily: "Inter, sans-serif" }} />
+                  <input type="date" value={dueDate} onChange={e => handleDueDate(e.target.value)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, border: "none", padding: 0, margin: 0, cursor: "pointer", fontSize: "16px", fontFamily: "Inter, sans-serif" }} />
                 </div>
               </div>
             </div>
@@ -1468,20 +1495,25 @@
                 dueDate={dueDate}
                 startPriority={sp}
                 peakPriority={pp}
-                onChange={(next) => {
-                  if (next.startPriority !== undefined) setSp(next.startPriority);
-                  if (next.peakPriority  !== undefined) setPp(next.peakPriority);
-                  if (next.startDate)                 setStartDate(next.startDate);
-                  if (next.dueDate)                   setDueDate(next.dueDate);
-                }}
+                onChange={handleGraphChange}
+                onCommit={handleGraphCommit}
               />
             </div>
             <label style={labelStyle}>Snooze Until</label>
-            <input type="date" style={fieldStyle} value={postpone} onChange={e => setPostpone(e.target.value)} />
-            <div style={{ display: "flex", gap: "10px", marginTop: "16px" }}>
-              <button onClick={onCancel} style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "1px solid #e2e8f0", background: "#fff", fontSize: "14px", fontWeight: "600", color: "#64748b", cursor: "pointer", fontFamily: "Inter" }}>Cancel</button>
-              <button onClick={() => onSave({ name, startDate, dueDate, startPriority: sp, peakPriority: pp, postponeUntil: postpone || null })} style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "none", background: "#3b82f6", fontSize: "14px", fontWeight: "600", color: "#fff", cursor: "pointer", fontFamily: "Inter" }}>Save</button>
-            </div>
+            <input type="date" style={fieldStyle} value={postpone} onChange={e => handlePostpone(e.target.value)} />
+
+            <button
+              onClick={onDone}
+              style={{ width: "100%", marginTop: "20px", padding: "16px", borderRadius: "12px", border: "none", background: "#22c55e", color: "#fff", fontSize: "17px", fontWeight: "700", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", boxShadow: "0 2px 8px rgba(34,197,94,0.35)", fontFamily: "Inter, sans-serif" }}
+            >
+              <CheckIcon /> Done
+            </button>
+            <button
+              onClick={onTrash}
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", margin: "10px auto 0", padding: "8px 14px", background: "transparent", border: "none", color: "#94a3b8", fontSize: "13px", fontWeight: "500", cursor: "pointer", fontFamily: "Inter, sans-serif" }}
+            >
+              <TrashIcon /> Trash
+            </button>
           </div>
         );
       }
@@ -1726,17 +1758,17 @@
               </div>
             )}
             <div style={S.cards}>
-              <div style={S.summaryCard("#fef2f2", summaryFilter === "overdue", summaryFilter && summaryFilter !== "overdue")} onClick={() => { toggleFilter("overdue"); if (tab !== "active") { setTab("active"); setExpandedId(null); setEditTarget(null); } }}>
+              <div style={S.summaryCard("#fef2f2", summaryFilter === "overdue", summaryFilter && summaryFilter !== "overdue")} onClick={() => { toggleFilter("overdue"); if (tab !== "active") { setTab("active"); setExpandedId(null); } }}>
                 <div style={S.summaryCount("#ef4444")}>{overdueCount}</div>
                 <div style={S.summaryLabel}>Overdue</div>
                 {summaryFilter === "overdue" && <div style={{ fontSize: "9px", color: "#ef4444", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
               </div>
-              <div style={S.summaryCard("#fffbeb", summaryFilter === "dueToday", summaryFilter && summaryFilter !== "dueToday")} onClick={() => { toggleFilter("dueToday"); if (tab !== "active") { setTab("active"); setExpandedId(null); setEditTarget(null); } }}>
+              <div style={S.summaryCard("#fffbeb", summaryFilter === "dueToday", summaryFilter && summaryFilter !== "dueToday")} onClick={() => { toggleFilter("dueToday"); if (tab !== "active") { setTab("active"); setExpandedId(null); } }}>
                 <div style={S.summaryCount("#f59e0b")}>{dueTodayCount}</div>
                 <div style={S.summaryLabel}>Due Today</div>
                 {summaryFilter === "dueToday" && <div style={{ fontSize: "9px", color: "#f59e0b", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
               </div>
-              <div style={S.summaryCard("#eff6ff", summaryFilter === "thisWeek", summaryFilter && summaryFilter !== "thisWeek")} onClick={() => { toggleFilter("thisWeek"); if (tab !== "active") { setTab("active"); setExpandedId(null); setEditTarget(null); } }}>
+              <div style={S.summaryCard("#eff6ff", summaryFilter === "thisWeek", summaryFilter && summaryFilter !== "thisWeek")} onClick={() => { toggleFilter("thisWeek"); if (tab !== "active") { setTab("active"); setExpandedId(null); } }}>
                 <div style={S.summaryCount("#3b82f6")}>{thisWeekCount}</div>
                 <div style={S.summaryLabel}>This Week</div>
                 {summaryFilter === "thisWeek" && <div style={{ fontSize: "9px", color: "#3b82f6", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
@@ -1777,9 +1809,9 @@
           )}
 
           <div style={S.tabBar}>
-            <button style={S.tabItem(tab === "active")} onClick={() => { setTab("active"); setExpandedId(null); setEditTarget(null); }}><ClipboardIcon color={tab === "active" ? "#3b82f6" : "#94a3b8"} /><span>Active</span></button>
-            <button style={S.tabItem(tab === "snoozed")} onClick={() => { setTab("snoozed"); setExpandedId(null); setEditTarget(null); setSummaryFilter(null); }}><ClockIcon color={tab === "snoozed" ? "#3b82f6" : "#94a3b8"} /><span>Snoozed</span></button>
-            <button style={S.tabItem(tab === "done")} onClick={() => { setTab("done"); setExpandedId(null); setEditTarget(null); setSummaryFilter(null); }}><CheckCircleIcon color={tab === "done" ? "#3b82f6" : "#94a3b8"} /><span>Done</span></button>
+            <button style={S.tabItem(tab === "active")} onClick={() => { setTab("active"); setExpandedId(null); }}><ClipboardIcon color={tab === "active" ? "#3b82f6" : "#94a3b8"} /><span>Active</span></button>
+            <button style={S.tabItem(tab === "snoozed")} onClick={() => { setTab("snoozed"); setExpandedId(null); setSummaryFilter(null); }}><ClockIcon color={tab === "snoozed" ? "#3b82f6" : "#94a3b8"} /><span>Snoozed</span></button>
+            <button style={S.tabItem(tab === "done")} onClick={() => { setTab("done"); setExpandedId(null); setSummaryFilter(null); }}><CheckCircleIcon color={tab === "done" ? "#3b82f6" : "#94a3b8"} /><span>Done</span></button>
           </div>
 
           {showDatePicker && (
