@@ -196,7 +196,7 @@
     function fmtFull(s) {
       if (!s) return "";
       const d = parseLocalDate(s);
-      return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
     }
     function todayDate() {
       const t = new Date(); t.setHours(0,0,0,0); return t;
@@ -1028,19 +1028,25 @@
           userSelect: "none",
         };
 
+        // NOTE: background MUST be fully opaque so the swipe-reveal buttons
+        // (positioned absolutely behind this layer) are not visible through
+        // the card. The overdue tint below is the opaque equivalent of
+        // blending rgba(239,68,68,0.04) over white.
         const slideStyle = {
           transform: `translateX(${swipeDx}px)`,
           transition: swipeRef.current.decided && swipeRef.current.direction !== "vertical" ? "none" : "transform 0.3s cubic-bezier(0.34,1.56,0.64,1)",
           willChange: "transform",
           position: "relative",
           zIndex: 1,
-          background: status === "overdue" ? "rgba(239,68,68,0.04)" : "#fff",
+          background: status === "overdue" ? "#fef8f8" : "#fff",
           borderRadius: "14px",
           borderLeft: "4px solid " + (status === "snoozed" ? "#c4b5fd" : status === "completed" ? "#86efac" : borderColor(score)),
           boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
           outline: status === "overdue" ? "1px solid rgba(239,68,68,0.15)" : "none",
-          opacity: status === "snoozed" ? 0.7 : 1,
         };
+        // Snoozed dim is applied to inner content only — applying it to the
+        // slide layer would let the swipe-reveal buttons show through.
+        const innerStyle = status === "snoozed" ? { opacity: 0.7 } : null;
 
         return (
           <div style={{ position: "relative", borderRadius: "14px", overflow: "hidden", marginBottom: "8px", cursor: "pointer" }}>
@@ -1092,7 +1098,7 @@
               onTouchEnd={onTouchEnd}
               onTouchCancel={onTouchCancel}
             >
-              <div style={S.cardInner} onClick={() => { if (isSwipeOpen || swipeDx !== 0) { snapClose(); return; } toggleExpand(task.id); }}>
+              <div style={{ ...S.cardInner, ...innerStyle }} onClick={() => { if (isSwipeOpen || swipeDx !== 0) { snapClose(); return; } toggleExpand(task.id); }}>
                 {task.complete ? (
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f0fdf4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#22c55e" }}><CheckIcon /></div>
                 ) : (
@@ -1107,7 +1113,7 @@
                 <ChevronIcon expanded={isExpanded} />
               </div>
               {isExpanded && (
-                <div style={S.expandArea}>
+                <div style={{ ...S.expandArea, ...innerStyle }}>
                   {editTarget === task.id ? (
                     <EditForm task={task} onSave={(changes) => { updateTask(task.id, changes); setEditTarget(null); showToast("Saved"); }} onCancel={() => setEditTarget(null)} />
                   ) : (
