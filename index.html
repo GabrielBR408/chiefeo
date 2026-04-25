@@ -157,32 +157,17 @@
       if (error) throw error;
     }
 
-    /* ══════════════ Default priorities (no LPC-specific data) ══════════════ */
+    /* ══════════════ Default priorities (no LPC-specific data) ══════════════
+       The default keyword library lives server-side in /api/score-task — it's
+       proprietary and we don't ship it in the page source. User-added keywords
+       still live in this config (in the user's Supabase priorities row) and
+       render in the Priorities UI; brand-new users see an empty list here and
+       the server's defaults apply silently during scoring. */
     const DEFAULT_PRIORITIES = {
       schemaVersion: 1,
       lastModifiedAt: null,
       people: [],
-      keywords: [
-        { id: "k1",  word: "urgent",          tier: "High",     default: true, enabled: true },
-        { id: "k2",  word: "ASAP",            tier: "High",     default: true, enabled: true },
-        { id: "k3",  word: "immediately",     tier: "High",     default: true, enabled: true },
-        { id: "k4",  word: "emergency",       tier: "High",     default: true, enabled: true },
-        { id: "k5",  word: "critical",        tier: "High",     default: true, enabled: true },
-        { id: "k6",  word: "time-sensitive",  tier: "High",     default: true, enabled: true },
-        { id: "k10", word: "deadline",        tier: "Medium",   default: true, enabled: true },
-        { id: "k11", word: "EOD",             tier: "Medium",   default: true, enabled: true },
-        { id: "k12", word: "end of day",      tier: "Medium",   default: true, enabled: true },
-        { id: "k13", word: "end of week",     tier: "Medium",   default: true, enabled: true },
-        { id: "k14", word: "COB",             tier: "Medium",   default: true, enabled: true },
-        { id: "k15", word: "action required", tier: "Medium",   default: true, enabled: true },
-        { id: "k16", word: "action needed",   tier: "Medium",   default: true, enabled: true },
-        { id: "k19", word: "high priority",   tier: "Medium",   default: true, enabled: true },
-        { id: "k30", word: "FYI",             tier: "Suppress", default: true, enabled: true },
-        { id: "k31", word: "no rush",         tier: "Suppress", default: true, enabled: true },
-        { id: "k32", word: "whenever you get a chance", tier: "Suppress", default: true, enabled: true },
-        { id: "k34", word: "unsubscribe",     tier: "Suppress", default: true, enabled: true },
-        { id: "k35", word: "newsletter",      tier: "Suppress", default: true, enabled: true },
-      ],
+      keywords: [],
       dueDateDefaults: { High: 1, Medium: 3, Low: 7, Suppress: 14 },
       manualAddDefault: { dueBucket: "+7" },
     };
@@ -265,7 +250,6 @@
       "Low":      { start: 1.0, peak: 3.0 },
       "Suppress": { start: 0.0, peak: 1.0 },
     };
-    const TIER_VALUE = { "High": 3, "Medium": 2, "Low": 1, "Suppress": 0 };
     const TIER_COLOR = {
       "High":     { bg: "#fee2e2", fg: "#b91c1c", border: "#fca5a5" },
       "Medium":   { bg: "#fef3c7", fg: "#92400e", border: "#fcd34d" },
@@ -288,68 +272,25 @@
     function scoreBg(score)     { return TIER_COLOR[bandFromScore(score)].bg; }
     function scoreColor(score)  { return TIER_COLOR[bandFromScore(score)].fg; }
 
-    function valueToTier(v) {
-      if (v < 0.5) return "Suppress";
-      if (v < 1.5) return "Low";
-      if (v < 2.5) return "Medium";
-      return "High";
-    }
-
-    function combineTiers(senderTier, keywordTiers) {
-      const senderVal = senderTier != null ? TIER_VALUE[senderTier] : TIER_VALUE.Medium;
-      if (!keywordTiers || keywordTiers.length === 0) return senderTier || "Medium";
-      let strongest = keywordTiers[0];
-      let maxDev = Math.abs(TIER_VALUE[strongest] - senderVal);
-      for (const kt of keywordTiers) {
-        const dev = Math.abs(TIER_VALUE[kt] - senderVal);
-        if (dev > maxDev) { strongest = kt; maxDev = dev; }
-      }
-      const kwVal = TIER_VALUE[strongest];
-      const final = senderVal + (kwVal - senderVal) * 0.5;
-      return valueToTier(final);
-    }
-
-    function scanKeywords(text, priorities) {
-      const lower = String(text || "").toLowerCase();
-      const hits = []; const words = [];
-      for (const kw of ((priorities && priorities.keywords) || [])) {
-        if (!kw.enabled) continue;
-        if (lower.includes(String(kw.word || "").toLowerCase())) {
-          hits.push(kw.tier); words.push(kw.word);
-        }
-      }
-      return { tiers: hits, words };
-    }
-
-    function lookupSenderTier(email, priorities) {
-      if (!email) return null;
-      const lower = String(email).toLowerCase();
-      for (const p of ((priorities && priorities.people) || [])) {
-        const pEmail = String(p.email || "").toLowerCase();
-        if (!pEmail) continue;
-        if (pEmail.startsWith("*@")) {
-          const domain = pEmail.substring(2);
-          if (lower.endsWith("@" + domain)) return p.tier;
-        } else if (pEmail === lower) {
-          return p.tier;
-        }
-      }
-      return null;
-    }
-
-    function scoreNewTask({ name, senderEmail, receivedDateISO, explicitDueDate, priorities, todayISO }) {
-      const senderTier = lookupSenderTier(senderEmail, priorities);
-      const kw = scanKeywords(name, priorities);
-      const tier = combineTiers(senderTier, kw.tiers);
-      const prio = TIER_TO_PRIORITY[tier] || TIER_TO_PRIORITY.Medium;
-      const daysOut = ((priorities && priorities.dueDateDefaults) || {})[tier] ?? 7;
-      let dueDate = explicitDueDate;
-      if (!dueDate) {
-        const base = parseLocalDate(receivedDateISO || todayISO);
-        base.setDate(base.getDate() + daysOut);
-        dueDate = toISO(base);
-      }
-      return { tier, startPriority: prio.start, peakPriority: prio.peak, dueDate, matchedKeywords: kw.words, senderTier };
+    /* ══════════════ Scoring API client ══════════════
+       The keyword library + tier/sender combination logic + due-date defaults
+       live in /api/score-task. The browser only ever sees the result for one
+       task at a time — never the keyword library itself. */
+    async function apiScoreTask(payload) {
+      const sb = getSupabase();
+      const { data: { session } } = await sb.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error("Not authenticated");
+      const resp = await fetch("/api/score-task", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + token,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) throw new Error("score-task " + resp.status);
+      return resp.json();
     }
 
     /* ── SVG Icons ── */
@@ -774,25 +715,30 @@
       const handleQuickAdd = useCallback(async (name, tier, dueDate) => {
         if (!name.trim()) return;
         const td = toISO(effectiveToday);
-        const prio = TIER_TO_PRIORITY[tier] || TIER_TO_PRIORITY.Medium;
-        const finalDue = dueDate || (() => {
-          const daysOut = ((priorities && priorities.dueDateDefaults) || {})[tier] ?? 7;
-          const base = parseLocalDate(td); base.setDate(base.getDate() + daysOut);
-          return toISO(base);
-        })();
-        const newTask = {
-          name: name.trim(),
-          startDate: td,
-          dueDate: finalDue,
-          startPriority: prio.start,
-          peakPriority: prio.peak,
-          postponeUntil: null,
-          complete: false,
-          trashed: false,
-        };
         setShowAddForm(false);
         setSyncStatus("saving");
         try {
+          // Server returns the start/peak priority for this tier and (if not
+          // explicit) the computed due date. We pass tier as tierOverride so
+          // the user's manual pick wins over keyword auto-detection.
+          const scored = await apiScoreTask({
+            name: name.trim(),
+            senderEmail: null,
+            receivedDateISO: td,
+            explicitDueDate: dueDate || null,
+            todayISO: td,
+            tierOverride: tier,
+          });
+          const newTask = {
+            name: name.trim(),
+            startDate: td,
+            dueDate: scored.dueDate || dueDate || td,
+            startPriority: scored.startPriority,
+            peakPriority: scored.peakPriority,
+            postponeUntil: null,
+            complete: false,
+            trashed: false,
+          };
           const inserted = await dbInsertTask(newTask, user.id);
           setTasks(prev => [inserted, ...prev]);
           setSyncStatus("saved");
@@ -804,7 +750,7 @@
           showToast("Add failed — check connection");
           console.error("Task insert failed:", e?.message, e?.code);
         }
-      }, [user.id, priorities]);
+      }, [user.id, effectiveToday]);
 
       /* ── Bulk delete completed tasks older than N days ─────────
          Counts matches locally first (loaded `tasks` already includes
@@ -895,14 +841,27 @@
       const isTimeTraveling = viewDate !== null && effectiveToday.getTime() !== realToday.getTime();
       const today = effectiveToday;
 
-      const rescoreAllTasks = () => {
+      const rescoreAllTasks = async () => {
         const td = toISO(today);
-        setTasks(prev => prev.map(t => {
-          if (t.complete || t.trashed) return t;
-          const r = scoreNewTask({ name: t.name, senderEmail: null, receivedDateISO: t.startDate, explicitDueDate: t.dueDate, priorities, todayISO: td });
-          return { ...t, startPriority: r.startPriority, peakPriority: r.peakPriority };
-        }));
-        showToast("Re-scored all active tasks");
+        const active = tasks.filter(t => !t.complete && !t.trashed);
+        try {
+          const results = await Promise.all(active.map(t =>
+            apiScoreTask({
+              name: t.name,
+              senderEmail: null,
+              receivedDateISO: t.startDate,
+              explicitDueDate: t.dueDate,
+              todayISO: td,
+            }).then(r => ({ id: t.id, startPriority: r.startPriority, peakPriority: r.peakPriority }))
+              .catch(() => null)
+          ));
+          const byId = new Map(results.filter(Boolean).map(r => [r.id, r]));
+          setTasks(prev => prev.map(t => byId.has(t.id) ? { ...t, ...byId.get(t.id) } : t));
+          showToast("Re-scored all active tasks");
+        } catch (e) {
+          showToast("Re-score failed — check connection");
+          console.error("Rescore failed:", e?.message, e?.code);
+        }
       };
 
       const scored = useMemo(() =>
@@ -1684,8 +1643,35 @@
         const [qaName, setQaName]               = useState("");
         const [qaTierOverride, setQaTierOverride] = useState(null);
         const [qaDueOverride, setQaDueOverride]   = useState(null);
+        // Live tier preview comes from /api/score-task with a 250ms debounce.
+        // Until the first response lands we default to "Medium" so the modal
+        // always has something to show; matched-keyword hints fill in once the
+        // server confirms the auto-detected tier.
+        const [autoScored, setAutoScored] = useState({ tier: "Medium", matchedKeywords: [] });
+        const debounceRef = useRef(null);
+        useEffect(() => {
+          if (!showAddForm) return;
+          const trimmed = qaName.trim();
+          if (!trimmed) { setAutoScored({ tier: "Medium", matchedKeywords: [] }); return; }
+          if (debounceRef.current) clearTimeout(debounceRef.current);
+          debounceRef.current = setTimeout(async () => {
+            try {
+              const r = await apiScoreTask({
+                name: trimmed,
+                senderEmail: null,
+                receivedDateISO: toISO(today),
+                explicitDueDate: null,
+                todayISO: toISO(today),
+              });
+              setAutoScored({ tier: r.tier || "Medium", matchedKeywords: r.matchedKeywords || [] });
+            } catch (e) {
+              // Silent — keep the previous preview rather than flicker the UI.
+              console.error("Score preview failed:", e?.message);
+            }
+          }, 250);
+          return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+        }, [qaName, showAddForm]);
         if (!showAddForm) return null;
-        const autoScored = scoreNewTask({ name: qaName, senderEmail: null, receivedDateISO: toISO(today), explicitDueDate: null, priorities, todayISO: toISO(today) });
         const effectiveTier = qaTierOverride || autoScored.tier;
         const effectiveDue = qaDueOverride || (() => { const daysOut = ((priorities && priorities.dueDateDefaults) || {})[effectiveTier] ?? 7; const base = new Date(today); base.setDate(base.getDate() + daysOut); return toISO(base); })();
         const fieldStyle = { width: "100%", padding: "12px 14px", borderRadius: "10px", border: "1px solid #e2e8f0", fontSize: "15px", fontFamily: "Inter, sans-serif", outline: "none" };
