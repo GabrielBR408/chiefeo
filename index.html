@@ -73,6 +73,8 @@
         postponeUntil: row.postpone_until || null,
         complete:      row.complete,
         trashed:       row.trashed,
+        completedAt:   row.completed_at || null,
+        trashedAt:     row.trashed_at || null,
       };
     }
 
@@ -87,6 +89,8 @@
         postpone_until: task.postponeUntil || null,
         complete:       task.complete ?? false,
         trashed:        task.trashed ?? false,
+        completed_at:   task.completedAt || null,
+        trashed_at:     task.trashedAt || null,
       };
     }
 
@@ -124,6 +128,8 @@
       if (changes.postponeUntil !== undefined) dbChanges.postpone_until = changes.postponeUntil || null;
       if (changes.complete      !== undefined) dbChanges.complete       = changes.complete;
       if (changes.trashed       !== undefined) dbChanges.trashed        = changes.trashed;
+      if (changes.completedAt   !== undefined) dbChanges.completed_at   = changes.completedAt;
+      if (changes.trashedAt     !== undefined) dbChanges.trashed_at     = changes.trashedAt;
       const { error } = await sb
         .from("tasks")
         .update(dbChanges)
@@ -736,6 +742,16 @@
 
       // ── Task mutators (optimistic + async persist) ─────────────
       const updateTask = useCallback(async (id, changes) => {
+        // When complete/trashed flip, pair the change with its timestamp
+        // (or null on un-flip) so the server columns stay in sync with the
+        // boolean. Only inject when the caller hasn't supplied an explicit
+        // timestamp value already.
+        if (changes.complete !== undefined && changes.completedAt === undefined) {
+          changes = { ...changes, completedAt: changes.complete ? new Date().toISOString() : null };
+        }
+        if (changes.trashed !== undefined && changes.trashedAt === undefined) {
+          changes = { ...changes, trashedAt: changes.trashed ? new Date().toISOString() : null };
+        }
         // Optimistic update
         setTasks(prev => prev.map(t => t.id === id ? { ...t, ...changes } : t));
         setSyncStatus("saving");

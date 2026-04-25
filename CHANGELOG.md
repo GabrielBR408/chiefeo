@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `tasks.completed_at` and `tasks.trashed_at` (TIMESTAMPTZ) columns are now read and written by the frontend. The central `updateTask` mutator pairs every `complete`/`trashed` flag flip with its corresponding timestamp (or NULL on un-flip), and `dbRowToTask` / `taskToDbRow` / `dbUpdateTask` map the new fields. Pre-existing rows with NULL timestamps are tolerated (they fall through every "older than X" sweep).
+  > **Migration required.** Run in the Supabase SQL editor before merging:
+  > ```sql
+  > ALTER TABLE tasks ADD COLUMN completed_at TIMESTAMPTZ;
+  > ALTER TABLE tasks ADD COLUMN trashed_at   TIMESTAMPTZ;
+  > UPDATE tasks SET completed_at = updated_at WHERE complete = true AND completed_at IS NULL;
+  > UPDATE tasks SET trashed_at   = updated_at WHERE trashed  = true AND trashed_at   IS NULL;
+  > ```
 - Copyright notice HTML comment at the top of `index.html`.
 - `LICENSE` file declaring proprietary, all-rights-reserved terms under Golden Real Estate Ventures and Exchanges LLC.
 - Web App Manifest at `manifest.json` (repo root, served as `/manifest.json`) declaring ChiefEO as a standalone PWA (theme color `#3b82f6`, background `#f8fafc`, start URL `/`).
