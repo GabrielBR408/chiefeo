@@ -3,7 +3,7 @@
 // for Supabase API requests so live data wins when online but the app stays
 // usable when offline.
 
-const CACHE = "chiefeo-v1";
+const CACHE = "chiefeo-v2";
 const SHELL = ["/", "/index.html", "/manifest.json", "/icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {

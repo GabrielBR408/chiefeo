@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ChiefEO app icon (light variant) — for light-background contexts.
+  © 2026 GREVE LLC
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" rx="224" ry="224" fill="#f8fafc" stroke="#e2e8f0" stroke-width="2"/>
+  <g>
+    <rect x="222" y="280" width="580" height="130" rx="65" ry="65" fill="#3b82f6"/>
+    <rect x="222" y="447" width="440" height="130" rx="65" ry="65" fill="#3b82f6" opacity="0.72"/>
+    <rect x="222" y="614" width="300" height="130" rx="65" ry="65" fill="#3b82f6" opacity="0.48"/>
+  </g>
+</svg>
