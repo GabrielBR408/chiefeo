@@ -627,6 +627,24 @@
       const [snoozeTarget, setSnoozeTarget] = useState(null);
       const [swipeOpenId, setSwipeOpenId] = useState(null);
 
+      // Per-user completion timestamps (localStorage). Used to sort the Done
+      // tab so the most recently completed task is at the top — handy for
+      // recovering a task you tapped Done by accident. Tasks without a
+      // recorded timestamp (older completions, other devices) fall back to
+      // sort by id below.
+      const completedAtKey = "chiefeo.completedAt." + user.id;
+      const [completedAt, setCompletedAt] = useState(() => {
+        try { return JSON.parse(localStorage.getItem(completedAtKey) || "{}") || {}; }
+        catch { return {}; }
+      });
+      const recordCompletion = useCallback((id) => {
+        setCompletedAt(prev => {
+          const next = { ...prev, [id]: Date.now() };
+          try { localStorage.setItem(completedAtKey, JSON.stringify(next)); } catch {}
+          return next;
+        });
+      }, [completedAtKey]);
+
       // Safety net for iOS touch-cancel: if the tab loses focus, or a scroll gesture
       // is cancelled system-wide, force the open card closed so it never strands.
       useEffect(() => {
@@ -813,7 +831,14 @@
 
       const activeTasks   = useMemo(() => scored.filter(t => !t.complete && !t.trashed && t._status !== "snoozed").sort((a, b) => b._score - a._score), [scored]);
       const snoozedTasks  = useMemo(() => scored.filter(t => !t.complete && !t.trashed && t._status === "snoozed").sort((a, b) => parseLocalDate(a.postponeUntil) - parseLocalDate(b.postponeUntil)), [scored]);
-      const doneTasks     = useMemo(() => scored.filter(t => t.complete && !t.trashed).sort((a, b) => b.id - a.id), [scored]);
+      const doneTasks     = useMemo(() => scored.filter(t => t.complete && !t.trashed).sort((a, b) => {
+        const ta = completedAt[a.id];
+        const tb = completedAt[b.id];
+        if (ta && tb) return tb - ta;          // both timestamped — newest first
+        if (ta) return -1;                       // a has timestamp, goes above
+        if (tb) return 1;                        // b has timestamp, goes above
+        return b.id - a.id;                      // neither — fall back to id
+      }), [scored, completedAt]);
 
       const overdueCount  = activeTasks.filter(t => t._status === "overdue").length;
       const dueTodayCount = activeTasks.filter(t => { const dd = parseLocalDate(t.dueDate); dd.setHours(0,0,0,0); return dd.getTime() === today.getTime(); }).length;
@@ -932,7 +957,7 @@
           setBouncing(true);
           setTimeout(() => setBouncing(false), 200);
           snapClose();
-          if (action === "done") { updateTask(task.id, { complete: true }); setExpandedId(null); showToast("Done!"); }
+          if (action === "done") { recordCompletion(task.id); updateTask(task.id, { complete: true }); setExpandedId(null); showToast("Done!"); }
           else if (action === "snooze") { setSnoozeTarget(task.id); }
           else if (action === "trash") { updateTask(task.id, { trashed: true }); setExpandedId(null); showToast("Trashed"); }
           else if (action === "edit") { setExpandedId(task.id); }
@@ -1128,6 +1153,7 @@
                     onTaskChange={(changes) => updateTask(task.id, changes)}
                     onDone={() => {
                       setExiting("done");
+                      recordCompletion(task.id);
                       setTimeout(() => {
                         updateTask(task.id, { complete: true });
                         setExpandedId(null);
