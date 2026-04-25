@@ -8,14 +8,27 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>ChiefEO</title>
+  <title>ChiefEO™ — Auto-prioritizing todo list</title>
+  <meta name="description" content="Tasks that rank themselves. Add anything, ChiefEO tells you what to do first.">
   <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icons/favicon.ico" sizes="any">
+  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="/icons/icon-16.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="theme-color" content="#3b82f6">
+  <!-- Open Graph / social sharing -->
+  <meta property="og:title" content="ChiefEO™ — Auto-prioritizing todo list">
+  <meta property="og:description" content="Tasks that rank themselves. Add anything, ChiefEO tells you what to do first.">
+  <meta property="og:image" content="/icons/icon-512.png">
+  <meta property="og:url" content="https://chiefeo.vercel.app">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="ChiefEO™ — Auto-prioritizing todo list">
+  <meta name="twitter:description" content="Tasks that rank themselves. Add anything, ChiefEO tells you what to do first.">
+  <meta name="twitter:image" content="/icons/icon-512.png">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" integrity="sha384-tMH8h3BGESGckSAVGZ82T9n90ztNXxvdwvdM6UoR56cYcf+0iGXBliJ29D+wZ/x8" crossorigin="anonymous"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" integrity="sha384-bm7MnzvK++ykSwVJ2tynSE5TRdN+xL418osEVF2DE/L/gfWHj91J2Sphe582B1Bh" crossorigin="anonymous"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js" integrity="sha384-ku9eM40vVDsFUiERorrdlHlF0LIhdfn716M7TntM72Uo98T7LWiogD3hNenPx8Q0" crossorigin="anonymous"></script>
@@ -28,10 +41,88 @@
     input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0.6; }
     input[type="range"] { -webkit-appearance: none; width: 100%; height: 6px; border-radius: 3px; background: #e2e8f0; outline: none; }
     input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #3b82f6; cursor: pointer; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+
+    /* Splash / loading screen — covers the page until React mounts, then fades. */
+    #chiefeo-splash {
+      position: fixed; inset: 0; z-index: 2147483646;
+      background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 18px;
+      transition: opacity 320ms ease;
+      will-change: opacity;
+    }
+    #chiefeo-splash.hide { opacity: 0; pointer-events: none; }
+    #chiefeo-splash .splash-icon {
+      width: 88px; height: 88px;
+      filter: drop-shadow(0 8px 24px rgba(59,130,246,0.35));
+    }
+    #chiefeo-splash .splash-title {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 28px; font-weight: 700; letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #ffffff 0%, #93c5fd 100%);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; color: transparent;
+    }
+    #chiefeo-splash .splash-title sup {
+      font-size: 11px; font-weight: 600; margin-left: 2px;
+      vertical-align: super; -webkit-text-fill-color: #93c5fd; color: #93c5fd;
+    }
+    #chiefeo-splash .splash-spinner {
+      width: 22px; height: 22px; border-radius: 50%;
+      border: 2px solid rgba(148,163,184,0.25);
+      border-top-color: #3b82f6;
+      animation: chiefeoSpin 0.9s linear infinite;
+    }
+    @keyframes chiefeoSpin { to { transform: rotate(360deg); } }
+
+    /* Document footer — sits below the centered #root card on desktop, and at the
+       bottom of the body on mobile. Subtle muted text, never sticky. */
+    #chiefeo-doc-footer {
+      text-align: center;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 11px; color: #94a3b8; letter-spacing: 0.2px;
+      padding: 14px 16px 18px 16px;
+      background: transparent;
+    }
   </style>
 </head>
 <body>
+  <!-- Splash / loading screen — removed by /icons inline boot script once React mounts. -->
+  <div id="chiefeo-splash" role="status" aria-label="Loading ChiefEO">
+    <svg class="splash-icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="splashBg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#3b82f6"/>
+          <stop offset="100%" stop-color="#2563eb"/>
+        </linearGradient>
+      </defs>
+      <rect width="1024" height="1024" rx="224" ry="224" fill="url(#splashBg)"/>
+      <rect x="222" y="280" width="580" height="130" rx="65" ry="65" fill="#ffffff"/>
+      <rect x="222" y="447" width="440" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.78"/>
+      <rect x="222" y="614" width="300" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.58"/>
+    </svg>
+    <div class="splash-title">ChiefEO<sup>&trade;</sup></div>
+    <div class="splash-spinner" aria-hidden="true"></div>
+  </div>
+  <script>
+    (function () {
+      // Fade out and remove the splash. Called by the React app on first mount,
+      // and as a safety fallback after 5s in case the bundle never boots.
+      var faded = false;
+      window.__chiefeoReady = function () {
+        if (faded) return; faded = true;
+        var el = document.getElementById("chiefeo-splash");
+        if (!el) return;
+        el.classList.add("hide");
+        setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 360);
+      };
+      setTimeout(function () { window.__chiefeoReady(); }, 5000);
+    })();
+  </script>
+
   <div id="root"></div>
+
+  <footer id="chiefeo-doc-footer">&copy; 2026 GREVE LLC</footer>
 
   <script type="module">
     // ─── Supabase client bootstrap ────────────────────────────────────────────
@@ -460,6 +551,9 @@
       const [authChecked, setAuthChecked] = useState(false);
       const [switching, setSwitching]   = useState(false);
       const [switchError, setSwitchError] = useState(null);
+
+      // Fade the boot splash as soon as React has mounted anything.
+      useEffect(() => { if (typeof window.__chiefeoReady === "function") window.__chiefeoReady(); }, []);
 
       // ── Auth bootstrap ──────────────────────────────────────────
       useEffect(() => {
@@ -905,7 +999,9 @@
         app: { minHeight: "100vh", background: "#f8fafc", display: "flex", flexDirection: "column", position: "relative" },
         header: { background: "linear-gradient(135deg, #1e293b 0%, #334155 100%)", padding: "16px 20px 0 20px", position: "relative" },
         headerTop: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" },
-        title: { fontSize: "22px", fontWeight: "700", color: "#fff", letterSpacing: "-0.3px" },
+        title: { fontSize: "22px", fontWeight: "700", color: "#fff", letterSpacing: "-0.3px", display: "flex", alignItems: "center", gap: "8px" },
+        titleIcon: { width: "24px", height: "24px", flexShrink: 0, display: "block" },
+        titleTm: { fontSize: "10px", fontWeight: "600", color: "#94a3b8", verticalAlign: "super", marginLeft: "1px", letterSpacing: 0 },
         subtitle: { fontSize: "12px", color: "#94a3b8", fontWeight: "500", marginTop: "1px" },
         dateBadge: { background: "rgba(255,255,255,0.15)", borderRadius: "10px", padding: "6px 12px", display: "flex", flexDirection: "column", alignItems: "center" },
         dateMonth: { fontSize: "10px", color: "#94a3b8", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.5px" },
@@ -1850,7 +1946,15 @@
           <div style={S.header}>
             <div style={S.headerTop}>
               <div>
-                <div style={S.title}>ChiefEO</div>
+                <div style={S.title}>
+                  <svg style={S.titleIcon} viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <rect width="1024" height="1024" rx="224" ry="224" fill="#3b82f6"/>
+                    <rect x="222" y="280" width="580" height="130" rx="65" ry="65" fill="#ffffff"/>
+                    <rect x="222" y="447" width="440" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.78"/>
+                    <rect x="222" y="614" width="300" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.58"/>
+                  </svg>
+                  <span>ChiefEO<span style={S.titleTm}>&trade;</span></span>
+                </div>
                 <div style={S.subtitle}>
                   {(() => {
                     const acct = getAccountByEmail(user.email);
