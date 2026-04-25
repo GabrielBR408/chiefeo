@@ -73,6 +73,8 @@
         postponeUntil: row.postpone_until || null,
         complete:      row.complete,
         trashed:       row.trashed,
+        completedAt:   row.completed_at || null,
+        trashedAt:     row.trashed_at || null,
       };
     }
 
@@ -87,6 +89,8 @@
         postpone_until: task.postponeUntil || null,
         complete:       task.complete ?? false,
         trashed:        task.trashed ?? false,
+        completed_at:   task.completedAt || null,
+        trashed_at:     task.trashedAt || null,
       };
     }
 
@@ -124,6 +128,8 @@
       if (changes.postponeUntil !== undefined) dbChanges.postpone_until = changes.postponeUntil || null;
       if (changes.complete      !== undefined) dbChanges.complete       = changes.complete;
       if (changes.trashed       !== undefined) dbChanges.trashed        = changes.trashed;
+      if (changes.completedAt   !== undefined) dbChanges.completed_at   = changes.completedAt;
+      if (changes.trashedAt     !== undefined) dbChanges.trashed_at     = changes.trashedAt;
       const { error } = await sb
         .from("tasks")
         .update(dbChanges)
@@ -688,6 +694,10 @@
       const prioritiesSaveTimerRef                = useRef(null);
       const suppressPrioritiesSaveRef             = useRef(true);
 
+      const [cleanupDays, setCleanupDays]         = useState(90);
+      const [cleanupConfirm, setCleanupConfirm]   = useState(null);
+      const [cleanupBusy, setCleanupBusy]         = useState(false);
+
       const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
 
       // ── Load tasks from Supabase on mount ──────────────────────
@@ -736,6 +746,16 @@
 
       // ── Task mutators (optimistic + async persist) ─────────────
       const updateTask = useCallback(async (id, changes) => {
+        // When complete/trashed flip, pair the change with its timestamp
+        // (or null on un-flip) so the server columns stay in sync with the
+        // boolean. Only inject when the caller hasn't supplied an explicit
+        // timestamp value already.
+        if (changes.complete !== undefined && changes.completedAt === undefined) {
+          changes = { ...changes, completedAt: changes.complete ? new Date().toISOString() : null };
+        }
+        if (changes.trashed !== undefined && changes.trashedAt === undefined) {
+          changes = { ...changes, trashedAt: changes.trashed ? new Date().toISOString() : null };
+        }
         // Optimistic update
         setTasks(prev => prev.map(t => t.id === id ? { ...t, ...changes } : t));
         setSyncStatus("saving");
@@ -785,6 +805,55 @@
           console.error("Task insert failed:", e?.message, e?.code);
         }
       }, [user.id, priorities]);
+
+      /* ── Bulk delete completed tasks older than N days ─────────
+         Counts matches locally first (loaded `tasks` already includes
+         all of this user's non-trashed tasks, complete + active), opens
+         a confirmation modal, and on confirm sends a single Supabase
+         DELETE filtered by user_id + complete=true + completed_at < cutoff.
+         Tasks with a NULL completed_at (pre-migration completions) are
+         excluded — we only sweep tasks whose completion time we know. */
+      const CLEANUP_OPTIONS = [
+        { days: 30,  label: "30 days" },
+        { days: 90,  label: "90 days" },
+        { days: 180, label: "6 months" },
+        { days: 365, label: "1 year" },
+      ];
+      const openCleanupConfirm = useCallback(() => {
+        const cutoffMs = Date.now() - cleanupDays * 86400000;
+        const count = tasks.reduce((n, t) => {
+          if (!t.complete || t.trashed || !t.completedAt) return n;
+          return new Date(t.completedAt).getTime() < cutoffMs ? n + 1 : n;
+        }, 0);
+        setCleanupConfirm({ count, days: cleanupDays, cutoffMs });
+      }, [tasks, cleanupDays]);
+      const runCleanup = useCallback(async () => {
+        if (!cleanupConfirm || cleanupBusy) return;
+        setCleanupBusy(true);
+        const { count, cutoffMs } = cleanupConfirm;
+        const cutoffISO = new Date(cutoffMs).toISOString();
+        try {
+          const sb = getSupabase();
+          const { error } = await sb
+            .from("tasks")
+            .delete()
+            .eq("user_id", user.id)
+            .eq("complete", true)
+            .lt("completed_at", cutoffISO);
+          if (error) throw error;
+          setTasks(prev => prev.filter(t => {
+            if (!t.complete || t.trashed || !t.completedAt) return true;
+            return new Date(t.completedAt).getTime() >= cutoffMs;
+          }));
+          setCleanupConfirm(null);
+          showToast("Deleted " + count + " completed task" + (count === 1 ? "" : "s") + ".");
+        } catch (e) {
+          console.error("Cleanup failed:", e?.message, e?.code);
+          showToast("Cleanup failed — check connection");
+        } finally {
+          setCleanupBusy(false);
+        }
+      }, [cleanupConfirm, cleanupBusy, user.id]);
 
       /* ── V4 Priorities mutators ── */
       const addPerson = () => {
@@ -1583,6 +1652,33 @@
         );
       };
 
+      /* ── Cleanup Confirmation Modal ── */
+      const CleanupConfirmModal = () => {
+        if (!cleanupConfirm) return null;
+        const { count, days } = cleanupConfirm;
+        const windowLabel = (CLEANUP_OPTIONS.find(o => o.days === days) || {}).label || (days + " days");
+        const closeIfIdle = () => { if (!cleanupBusy) setCleanupConfirm(null); };
+        const disabled = cleanupBusy || count === 0;
+        return (
+          <div style={S.overlay} onClick={closeIfIdle}>
+            <div style={S.modal} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: "18px", fontWeight: "700", color: "#1e293b", marginBottom: "6px" }}>Delete completed tasks?</div>
+              <div style={{ fontSize: "14px", color: "#475569", lineHeight: 1.5, marginBottom: "20px" }}>
+                {count === 0
+                  ? <>No completed tasks older than <b>{windowLabel}</b> were found.</>
+                  : <>This will permanently delete <b>{count}</b> completed task{count === 1 ? "" : "s"} older than <b>{windowLabel}</b>. Continue?</>}
+              </div>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button onClick={closeIfIdle} disabled={cleanupBusy} style={{ flex: 1, padding: "14px", borderRadius: "12px", border: "1px solid #e2e8f0", background: "#fff", fontSize: "15px", fontWeight: "600", color: "#64748b", cursor: cleanupBusy ? "default" : "pointer", fontFamily: "Inter", opacity: cleanupBusy ? 0.6 : 1 }}>{count === 0 ? "Close" : "Cancel"}</button>
+                {count > 0 && (
+                  <button onClick={runCleanup} disabled={disabled} style={{ flex: 1, padding: "14px", borderRadius: "12px", border: "none", background: disabled ? "#cbd5e1" : "#dc2626", fontSize: "15px", fontWeight: "600", color: "#fff", cursor: disabled ? "default" : "pointer", fontFamily: "Inter" }}>{cleanupBusy ? "Deleting…" : "Delete"}</button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      };
+
       /* ── Quick Add Modal ── */
       const QuickAddModal = () => {
         const [qaName, setQaName]               = useState("");
@@ -1739,6 +1835,17 @@
                       <div style={{ fontSize: "9px", color: tc.fg, marginTop: "2px", opacity: 0.7 }}>days out</div>
                     </div>);
                   })}
+                </div>
+              </div>
+              <div style={cardStyle}>
+                <div style={sectionTitle}>Cleanup</div>
+                <div style={sectionSub}>Permanently delete completed tasks older than the chosen window. Only sweeps tasks completed after this feature shipped — older Done items are kept.</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <label style={{ fontSize: "13px", color: "#475569", fontWeight: "500" }}>Delete completed tasks older than:</label>
+                  <select value={cleanupDays} onChange={e => setCleanupDays(parseInt(e.target.value, 10))} style={{ padding: "10px 12px", borderRadius: "10px", border: "1px solid #e2e8f0", fontSize: "14px", fontFamily: "Inter, sans-serif", background: "#fff", outline: "none" }}>
+                    {CLEANUP_OPTIONS.map(o => <option key={o.days} value={o.days}>{o.label}</option>)}
+                  </select>
+                  <button onClick={openCleanupConfirm} style={{ background: "#fef2f2", color: "#b91c1c", border: "none", borderRadius: "10px", padding: "10px 14px", fontSize: "14px", fontWeight: "600", cursor: "pointer", fontFamily: "Inter, sans-serif" }}>Delete now</button>
                 </div>
               </div>
               <div style={cardStyle}>
@@ -1903,6 +2010,7 @@
 
           <SnoozeModal />
           <QuickAddModal />
+          <CleanupConfirmModal />
           {toast && <div style={S.toast}>{toast}</div>}
 
           {/* ── Account Switcher Sheet ── */}
