@@ -1178,11 +1178,10 @@
         const wantedRight = dd.getTime() + dynPad;
 
         // Window behavior:
-        //  - While dragging: grow to follow the dot, never shrink (prevents
-        //    visual bouncing as the cursor crosses the edge).
-        //  - On drop: re-fit the window snugly to the current dates so a
-        //    later drag back to earlier dates doesn't leave you stranded
-        //    in a stale wide view.
+        //  - While dragging: LOCK the window. Dragging past the visible edge
+        //    invokes EDGE_FRICTION below rather than expanding the plot
+        //    (which would let dates accelerate per pixel of finger travel).
+        //  - On drop: re-fit the window snugly to the current dates.
         // `windowEpoch` is bumped by onUp to trigger a refit on the next render.
         const windowRef = React.useRef(null);
         const dragRef   = React.useRef(null);
@@ -1191,11 +1190,8 @@
         if (!windowRef.current || !dragRef.current) {
           // Not dragging — snap fresh to the current dates
           windowRef.current = { leftMs: wantedLeft, rightMs: wantedRight };
-        } else {
-          // Mid-drag — grow only, never shrink
-          windowRef.current.leftMs  = Math.min(windowRef.current.leftMs,  wantedLeft);
-          windowRef.current.rightMs = Math.max(windowRef.current.rightMs, wantedRight);
         }
+        // Mid-drag: window stays at the snapshot from drag-start.
         const leftMs  = windowRef.current.leftMs;
         const rightMs = windowRef.current.rightMs;
 
@@ -1258,9 +1254,11 @@
           dragRef.current = which;
           if (e.preventDefault) e.preventDefault();
         };
-        // When dragging past the visible edge, slow the date change down by this
-        // factor so dates don't shoot out wildly as the window expands.
-        const EDGE_FRICTION = 0.25;
+        // When dragging past the visible edge, slow the date change down to
+        // this fraction of finger travel. With a locked drag window (above),
+        // every pixel past the edge moves the date this much, so a low value
+        // keeps off-screen dragging slow and controlled.
+        const EDGE_FRICTION = 0.08;
 
         const onMove = (e) => {
           if (!dragRef.current) return;
@@ -1594,7 +1592,25 @@
         );
       };
 
-      const currentList = tab === "active" ? filteredActiveTasks : tab === "snoozed" ? snoozedTasks : doneTasks;
+      // Lock the visible list order while a card is expanded. Without this,
+      // auto-saving a priority change would re-score the task and shuffle it
+      // out from under the user's finger. The order refreshes once the panel
+      // collapses (expandedId becomes null).
+      const baseList = tab === "active" ? filteredActiveTasks : tab === "snoozed" ? snoozedTasks : doneTasks;
+      const frozenOrderRef = useRef(null);
+      if (expandedId === null) {
+        frozenOrderRef.current = null;
+      } else if (frozenOrderRef.current === null) {
+        frozenOrderRef.current = baseList.map(t => t.id);
+      }
+      const currentList = (() => {
+        if (!frozenOrderRef.current) return baseList;
+        const byId = new Map(baseList.map(t => [t.id, t]));
+        const ordered = frozenOrderRef.current.map(id => byId.get(id)).filter(Boolean);
+        const frozenSet = new Set(frozenOrderRef.current);
+        const extras = baseList.filter(t => !frozenSet.has(t.id));
+        return [...ordered, ...extras];
+      })();
 
       const undoLastRemoval = () => { if (!lastRemoved) return; setPriorities(lastRemoved.snapshot); setLastRemoved(null); showToast("Restored"); };
       const dismissLastRemoval = () => setLastRemoved(null);
