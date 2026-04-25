@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Cleanup** card on the Priorities/settings page lets the user permanently delete completed tasks older than a chosen window (30 days, 90 days, 6 months, 1 year). Counts matches against the locally loaded task list, opens a confirmation modal showing the count, and on confirm runs a single Supabase `DELETE` filtered by `user_id + complete=true + completed_at < cutoff`. Tasks with NULL `completed_at` (completions from before Phase 3) are excluded — only tasks whose completion time is known get swept. Shows a "Deleted N completed tasks." toast on success.
 - `tasks.completed_at` and `tasks.trashed_at` (TIMESTAMPTZ) columns are now read and written by the frontend. The central `updateTask` mutator pairs every `complete`/`trashed` flag flip with its corresponding timestamp (or NULL on un-flip), and `dbRowToTask` / `taskToDbRow` / `dbUpdateTask` map the new fields. Pre-existing rows with NULL timestamps are tolerated (they fall through every "older than X" sweep).
   > **Migration required.** Run in the Supabase SQL editor before merging:
   > ```sql
