@@ -7,22 +7,32 @@ The dashboard makes **zero Claude API calls** — all data is populated by a
 fire-and-forget logging wrapper (Node and Python) that drops into your
 existing code.
 
-Two ways to run it. Pick one (you can switch later).
+Three ways to run it. They share the same wrapper, schema, and
+charting/aggregation code — switching later is a config change, not a rebuild.
 
-| | **HTML + Dropbox** (recommended day-1) | **React + Supabase + Vercel** (long-term) |
-|---|---|---|
-| Setup time | ~2 min | ~30 min |
-| Where it lives | one `tokenscope.html` file | hosted Vercel app |
-| Where data lives | a `.jsonl` file in your Dropbox | Supabase Postgres |
-| Auth | none — Dropbox link is the boundary | proper Supabase Auth |
-| Multi-user | no | yes |
-| Best for | one person, today | shared with others, long-term |
+| | **Demo mode** (zero setup) | **HTML + Dropbox** | **React + Supabase + Vercel** |
+|---|---|---|---|
+| Setup time | open the file | ~2 min | ~30 min |
+| Where it lives | `tokenscope.html` from disk | `tokenscope.html` anywhere | hosted Vercel app |
+| Where data lives | synthetic, in-memory | `.jsonl` in your Dropbox | Supabase Postgres |
+| Real data? | no — just a click-around mockup | yes | yes |
+| Auth | n/a | none (Dropbox link is the boundary) | Supabase Auth |
+| Best for | trying the UI right now | one-person workflow | shared / multi-user |
 
-The two paths share **the same wrapper**, **the same row schema**, and
-**the same aggregation/charting code**. Switching later is a config change,
-not a rebuild — see [`convert.md`](./convert.md).
+See [`convert.md`](./convert.md) for the migration path.
 
-## Path A — HTML + Dropbox (the simple path)
+## Path 0 — Demo mode (just open the file)
+
+Double-click `tokenscope.html`. The dashboard loads with ~200 rows of synthetic
+usage spread over 14 days, including a tag wired up to demonstrate the
+EMERGING ▲ badge and compare-mode deltas. Click around all four tabs, both
+modes, all window sizes — no Claude calls, no GitHub, no Dropbox, no anything.
+
+When you're ready for real data: open the gear icon → switch the source to
+**Upload file** (pick a JSONL the wrapper produced) or **Dropbox** (paste the
+share link). The setting persists in `localStorage`.
+
+## Path A — HTML + Dropbox (one-person real data)
 
 ```
 ┌──────────────────────┐  append   ┌─────────────────────┐  fetch    ┌────────────────┐

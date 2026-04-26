@@ -219,6 +219,90 @@
       return out;
     };
 
+    // ─── Demo data ────────────────────────────────────────────────────────────
+    // Synthetic ~14-day dataset so you can try the dashboard with zero setup.
+    // One tag (code-projects) only appears in the recent half so the EMERGING
+    // badge + compare-mode delta have something to point at.
+    const DEMO_PROFILES = [
+      { tag: "cam-rec",        weight: 0.18, model: "claude-sonnet-4-6",
+        inMin: 8000,  inMax: 25000, outRatio: 0.18, cacheRate: 0.30, latencyMs: 4500 },
+      { tag: "code-projects",  weight: 0.20, model: "claude-sonnet-4-6",
+        inMin: 12000, inMax: 35000, outRatio: 0.22, cacheRate: 0.25, latencyMs: 6000,
+        recentOnly: true },
+      { tag: "gl-variance",    weight: 0.13, model: "claude-sonnet-4-6",
+        inMin: 6000,  inMax: 15000, outRatio: 0.20, cacheRate: 0.45, latencyMs: 3200 },
+      { tag: "owner-report",   weight: 0.11, model: "claude-sonnet-4-6",
+        inMin: 9000,  inMax: 20000, outRatio: 0.25, cacheRate: 0.20, latencyMs: 4000 },
+      { tag: "cheat-sheet",    weight: 0.07, model: "claude-haiku-4-5-20251001",
+        inMin: 2000,  inMax: 8000,  outRatio: 0.30, cacheRate: 0.10, latencyMs: 1800 },
+      { tag: "expense-report", weight: 0.06, model: "claude-sonnet-4-6",
+        inMin: 4000,  inMax: 10000, outRatio: 0.28, cacheRate: 0.40, latencyMs: 2500 },
+      { tag: "chat",           weight: 0.18, model: "claude-haiku-4-5-20251001",
+        inMin: 200,   inMax: 1500,  outRatio: 0.40, cacheRate: 0.05, latencyMs: 700 },
+      // Sprinkle a little Opus traffic so the Models tab has three bars.
+      { tag: "code-projects",  weight: 0.07, model: "claude-opus-4-7",
+        inMin: 18000, inMax: 40000, outRatio: 0.25, cacheRate: 0.20, latencyMs: 9000,
+        recentOnly: true },
+    ];
+
+    const DEMO_PRICING = {
+      "claude-opus-4-7":            { input: 15.00, output: 75.00, cache_read: 1.50, cache_write: 18.75 },
+      "claude-sonnet-4-6":          { input:  3.00, output: 15.00, cache_read: 0.30, cache_write:  3.75 },
+      "claude-haiku-4-5-20251001":  { input:  0.80, output:  4.00, cache_read: 0.08, cache_write:  1.00 },
+    };
+
+    const pickWeighted = (profiles) => {
+      const total = profiles.reduce((s, p) => s + p.weight, 0);
+      let r = Math.random() * total;
+      for (const p of profiles) { if (r < p.weight) return p; r -= p.weight; }
+      return profiles[profiles.length - 1];
+    };
+
+    const generateDemoRows = () => {
+      const rows = [];
+      const dayMs = 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      for (let dayOffset = 13; dayOffset >= 0; dayOffset--) {
+        // Recent days are slightly busier — gives the weighted view something
+        // to lean into and keeps the trend chart reading "current trajectory".
+        const recencyBoost = Math.pow(1.06, 13 - dayOffset);
+        const callsToday = Math.round(10 * recencyBoost * (0.6 + Math.random() * 0.9));
+        const eligible = DEMO_PROFILES.filter(
+          (p) => !p.recentOnly || dayOffset <= 6
+        );
+        for (let i = 0; i < callsToday; i++) {
+          const p = pickWeighted(eligible);
+          const inTok  = Math.round(p.inMin + Math.random() * (p.inMax - p.inMin));
+          const outTok = Math.round(inTok * p.outRatio * (0.5 + Math.random()));
+          const cacheR = Math.round(inTok * p.cacheRate * (0.6 + Math.random() * 0.6));
+          const cacheW = cacheR > 0 ? Math.round(cacheR * (0.05 + Math.random() * 0.1)) : 0;
+          const ms     = Math.round(p.latencyMs * (0.5 + Math.random() * 0.9));
+          const ts = new Date(now - dayOffset * dayMs);
+          ts.setHours(8 + Math.floor(Math.random() * 12),
+                      Math.floor(Math.random() * 60),
+                      Math.floor(Math.random() * 60), 0);
+          const pp = DEMO_PRICING[p.model];
+          const cost = (inTok / 1e6) * pp.input + (outTok / 1e6) * pp.output
+                     + (cacheR / 1e6) * pp.cache_read + (cacheW / 1e6) * pp.cache_write;
+          rows.push({
+            id: `demo-${rows.length}`,
+            created_at: ts.toISOString(),
+            tag: p.tag,
+            model: p.model,
+            stop_reason: Math.random() > 0.04 ? "end_turn" : "max_tokens",
+            input_tokens:       inTok,
+            output_tokens:      outTok,
+            cache_read_tokens:  cacheR,
+            cache_write_tokens: cacheW,
+            cost_usd:           cost,
+            duration_ms:        ms,
+            metadata:           { demo: true },
+          });
+        }
+      }
+      return rows;
+    };
+
     // ─── Hooks ────────────────────────────────────────────────────────────────
     const useIsMobile = () => {
       const detect = () => typeof window !== "undefined" && window.innerWidth < MOBILE_BREAKPOINT;
@@ -231,17 +315,44 @@
       return mob;
     };
 
-    // Fetch + cache the entire JSONL once per URL change, then re-aggregate
-    // locally on every (window, mode) flip — no extra network hits.
-    const useRawLogs = (url, autoRefresh) => {
+    // Three data sources, all funneled through the same hook so the rest of
+    // the app stays source-agnostic:
+    //   demo    → synthetic data, regenerated on reload
+    //   file    → user picked a .jsonl from disk; rows live in-memory only
+    //   dropbox → fetch a public Dropbox link, optionally on a 30s poll
+    const useRawLogs = ({ source, url, fileRows, fileName, autoRefresh }) => {
       const [state, setState] = useState({
-        loading: !!url, error: null, rows: null, fetchedAt: null,
+        loading: source === "dropbox" && !!url,
+        error: null,
+        rows: null,
+        fetchedAt: null,
       });
       const reqId = useRef(0);
 
       const reload = useCallback(async () => {
+        if (source === "demo") {
+          setState({
+            loading: false, error: null,
+            rows: generateDemoRows(), fetchedAt: new Date(),
+          });
+          return;
+        }
+        if (source === "file") {
+          setState({
+            loading: false,
+            error: fileRows ? null : "Pick a .jsonl file from your computer.",
+            rows: fileRows,
+            fetchedAt: fileRows ? new Date() : null,
+          });
+          return;
+        }
+        // dropbox
         if (!url) {
-          setState({ loading: false, error: null, rows: null, fetchedAt: null });
+          setState({
+            loading: false,
+            error: "Paste your Dropbox shared link in settings.",
+            rows: null, fetchedAt: null,
+          });
           return;
         }
         const myReq = ++reqId.current;
@@ -249,7 +360,7 @@
         try {
           const target = normalizeDropboxUrl(url);
           // cache: "no-store" so Dropbox's edge cache doesn't pin a stale copy
-          // for the polling case. The .jsonl is small enough (single-user) that
+          // when we poll. The .jsonl is small enough (single-user) that
           // re-downloading every 30s is cheap.
           const res = await fetch(target, { cache: "no-store" });
           if (!res.ok) throw new Error(`fetch failed: ${res.status} ${res.statusText}`);
@@ -262,21 +373,22 @@
           setState({
             loading: false,
             error: e?.message || String(e),
-            rows: null,
-            fetchedAt: null,
+            rows: null, fetchedAt: null,
           });
         }
-      }, [url]);
+      }, [source, url, fileRows]);
 
       useEffect(() => { reload(); }, [reload]);
 
+      // Auto-refresh only makes sense for Dropbox — demo regenerates on reload
+      // anyway and file mode is a static one-shot upload.
       useEffect(() => {
-        if (!url || !autoRefresh) return;
+        if (source !== "dropbox" || !url || !autoRefresh) return;
         const id = setInterval(reload, REFRESH_MS);
         return () => clearInterval(id);
-      }, [url, autoRefresh, reload]);
+      }, [source, url, autoRefresh, reload]);
 
-      return { ...state, reload };
+      return { ...state, source, fileName, reload };
     };
 
     // ─── Aggregation ──────────────────────────────────────────────────────────
@@ -745,12 +857,81 @@
       );
     };
 
-    const SettingsPanel = ({ url, onUrlChange, autoRefresh, onAutoRefreshChange,
-                             onClose, fetchedAt, error }) => {
-      const [draft, setDraft] = useState(url || "");
-      useEffect(() => { setDraft(url || ""); }, [url]);
-      const save = () => { onUrlChange(draft.trim()); onClose(); };
-      const clear = () => { setDraft(""); onUrlChange(""); };
+    const SOURCE_OPTIONS = [
+      { key: "demo",    label: "Demo data",   sub: "synthetic ~14 days, instant" },
+      { key: "file",    label: "Upload file", sub: "pick a .jsonl from disk" },
+      { key: "dropbox", label: "Dropbox",     sub: "paste a public share link" },
+    ];
+
+    const SourceTab = ({ active, label, sub, onClick }) => (
+      <button type="button" onClick={onClick} style={{
+        flex: 1, padding: "10px 12px",
+        background: active ? `${C.accent}1a` : "transparent",
+        border: `1px solid ${active ? C.accent : C.border}`,
+        borderRadius: 8, textAlign: "left",
+        display: "flex", flexDirection: "column", gap: 2,
+        cursor: "pointer", color: active ? C.accent : C.text,
+        fontFamily: "'IBM Plex Mono', monospace",
+        transition: "border-color 0.15s, background 0.15s",
+      }}>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>{label}</span>
+        <span style={{ fontSize: 10, color: active ? C.accent : C.muted }}>{sub}</span>
+      </button>
+    );
+
+    const FilePicker = ({ fileName, onPick }) => {
+      const inputRef = useRef(null);
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <input ref={inputRef} type="file" accept=".jsonl,.json,.txt"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const reader = new FileReader();
+              reader.onload = () => {
+                const rows = parseJsonl(String(reader.result || ""));
+                onPick(rows, file.name);
+              };
+              reader.onerror = () => onPick(null, null,
+                reader.error?.message || "couldn't read file");
+              reader.readAsText(file);
+              // allow re-picking the same file later
+              e.target.value = "";
+            }}
+            style={{ display: "none" }} />
+          <button type="button" onClick={() => inputRef.current?.click()} style={{
+            background: C.cardAlt, border: `1px dashed ${C.border}`,
+            borderRadius: 8, padding: "12px 14px",
+            color: C.text, fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 12, textAlign: "left", cursor: "pointer",
+          }}>
+            {fileName
+              ? <>📄 <span style={{ color: C.accent }}>{fileName}</span> — click to replace</>
+              : <>📁 Click to pick a .jsonl file from your computer</>}
+          </button>
+          <Mono style={{ fontSize: 10, color: C.mutedLight, lineHeight: 1.5 }}>
+            file mode is in-memory only — closing the tab clears it. Use Dropbox
+            mode for a persistent setup.
+          </Mono>
+        </div>
+      );
+    };
+
+    const SettingsPanel = ({
+      source, onSourceChange,
+      url, onUrlChange,
+      fileName, onFilePick,
+      autoRefresh, onAutoRefreshChange,
+      onClose, fetchedAt, error,
+    }) => {
+      const [draftUrl, setDraftUrl] = useState(url || "");
+      useEffect(() => { setDraftUrl(url || ""); }, [url]);
+
+      const apply = () => {
+        if (source === "dropbox") onUrlChange(draftUrl.trim());
+        onClose();
+      };
+
       return (
         <div style={{
           position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
@@ -758,56 +939,90 @@
           zIndex: 200, padding: 16,
         }} onClick={onClose}>
           <div onClick={(e) => e.stopPropagation()} style={{
-            width: "100%", maxWidth: 520,
+            width: "100%", maxWidth: 540,
             background: C.card, border: `1px solid ${C.border}`,
             borderRadius: 12, padding: 24,
             display: "flex", flexDirection: "column", gap: 16,
             animation: "tk-fade-in 0.2s ease",
+            maxHeight: "92vh", overflowY: "auto",
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>Data source</div>
                 <Mono style={{ fontSize: 11, color: C.muted }}>
-                  paste your Dropbox shared link to usage.jsonl
+                  pick where the dashboard reads from
                 </Mono>
               </div>
               <button type="button" onClick={onClose} style={{
                 background: "transparent", border: "none", color: C.muted,
-                fontSize: 20, lineHeight: 1, cursor: "pointer",
+                fontSize: 22, lineHeight: 1, cursor: "pointer",
               }}>×</button>
             </div>
 
-            <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <Mono style={{
-                fontSize: 10, color: C.muted, letterSpacing: "0.15em",
-                textTransform: "uppercase",
-              }}>dropbox link</Mono>
-              <input type="url" value={draft} onChange={(e) => setDraft(e.target.value)}
-                placeholder="https://www.dropbox.com/scl/fi/.../usage.jsonl?rlkey=…&dl=0"
-                style={{
-                  width: "100%", background: C.cardAlt,
-                  border: `1px solid ${C.border}`, borderRadius: 6,
-                  padding: "10px 12px", color: C.text,
-                  fontFamily: "'IBM Plex Mono', monospace", fontSize: 12,
-                  outline: "none",
-                }} />
-              <Mono style={{ fontSize: 10, color: C.mutedLight, lineHeight: 1.5 }}>
-                paste any Dropbox share format (dl=0 / dl=1 / raw). The dashboard
-                normalizes it to a CORS-friendly raw URL automatically.
-              </Mono>
-            </label>
+            <div style={{ display: "flex", gap: 8 }}>
+              {SOURCE_OPTIONS.map((o) => (
+                <SourceTab key={o.key}
+                  active={source === o.key}
+                  label={o.label} sub={o.sub}
+                  onClick={() => onSourceChange(o.key)} />
+              ))}
+            </div>
 
-            <label style={{
-              display: "flex", alignItems: "center", gap: 10,
-              padding: "8px 0", cursor: "pointer",
-            }}>
-              <input type="checkbox" checked={autoRefresh}
-                onChange={(e) => onAutoRefreshChange(e.target.checked)}
-                style={{ accentColor: C.accent, width: 16, height: 16 }} />
-              <Mono style={{ fontSize: 12, color: C.text }}>
-                auto-refresh every {Math.round(REFRESH_MS / 1000)}s
-              </Mono>
-            </label>
+            {source === "demo" && (
+              <div style={{
+                background: `${C.accent}10`, border: `1px solid ${C.accent}33`,
+                borderRadius: 8, padding: "12px 14px",
+                fontSize: 12, color: C.text, lineHeight: 1.6,
+                fontFamily: "'IBM Plex Mono', monospace",
+              }}>
+                <div style={{ color: C.accent, marginBottom: 4 }}>⚡ demo mode</div>
+                ~200 synthetic rows across 14 days. <code>code-projects</code> is
+                seeded as an "emerging" tag (zero usage in the prior 7 days, big
+                in the recent 7) so the EMERGING ▲ badge and compare-mode deltas
+                have something to show off.
+              </div>
+            )}
+
+            {source === "file" && (
+              <FilePicker fileName={fileName}
+                onPick={(rows, name, err) => onFilePick(rows, name, err)} />
+            )}
+
+            {source === "dropbox" && (
+              <>
+                <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <Mono style={{
+                    fontSize: 10, color: C.muted, letterSpacing: "0.15em",
+                    textTransform: "uppercase",
+                  }}>dropbox shared link</Mono>
+                  <input type="url" value={draftUrl}
+                    onChange={(e) => setDraftUrl(e.target.value)}
+                    placeholder="https://www.dropbox.com/scl/fi/.../usage.jsonl?rlkey=…&dl=0"
+                    style={{
+                      width: "100%", background: C.cardAlt,
+                      border: `1px solid ${C.border}`, borderRadius: 6,
+                      padding: "10px 12px", color: C.text,
+                      fontFamily: "'IBM Plex Mono', monospace", fontSize: 12,
+                      outline: "none",
+                    }} />
+                  <Mono style={{ fontSize: 10, color: C.mutedLight, lineHeight: 1.5 }}>
+                    paste any Dropbox share format (dl=0 / dl=1 / raw). The dashboard
+                    normalizes it to a CORS-friendly raw URL automatically.
+                  </Mono>
+                </label>
+                <label style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "4px 0", cursor: "pointer",
+                }}>
+                  <input type="checkbox" checked={autoRefresh}
+                    onChange={(e) => onAutoRefreshChange(e.target.checked)}
+                    style={{ accentColor: C.accent, width: 16, height: 16 }} />
+                  <Mono style={{ fontSize: 12, color: C.text }}>
+                    auto-refresh every {Math.round(REFRESH_MS / 1000)}s
+                  </Mono>
+                </label>
+              </>
+            )}
 
             {error && (
               <div style={{
@@ -818,53 +1033,36 @@
             )}
             {fetchedAt && !error && (
               <Mono style={{ fontSize: 11, color: C.muted }}>
-                last fetch: {fetchedAt.toLocaleString()}
+                last load: {fetchedAt.toLocaleString()}
               </Mono>
             )}
 
-            <div style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>
-              <button type="button" onClick={clear} style={{
-                background: "transparent", border: `1px solid ${C.border}`,
-                color: C.muted, borderRadius: 8, padding: "8px 14px",
-                fontFamily: "'IBM Plex Mono', monospace", fontSize: 12,
-              }}>clear</button>
-              <button type="button" onClick={save} style={{
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button type="button" onClick={apply} style={{
                 background: C.accent, border: "none", color: C.bg,
                 borderRadius: 8, padding: "8px 18px", fontWeight: 600,
                 fontFamily: "'IBM Plex Mono', monospace", fontSize: 13,
-              }}>save</button>
+              }}>{source === "dropbox" ? "save" : "done"}</button>
             </div>
           </div>
         </div>
       );
     };
 
-    const SetupHelp = ({ onOpenSettings }) => (
+    const DemoBanner = ({ onOpenSettings }) => (
       <div style={{
-        background: C.card, border: `1px dashed ${C.border}`,
-        borderRadius: 12, padding: "32px 24px",
-        animation: "tk-fade-in 0.3s ease",
+        background: `${C.accent}12`, borderBottom: `1px solid ${C.accent}33`,
+        padding: "8px 16px", display: "flex", flexWrap: "wrap",
+        alignItems: "center", justifyContent: "space-between", gap: 8,
+        fontSize: 12, color: C.accent,
+        fontFamily: "'IBM Plex Mono', monospace",
       }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 8 }}>
-          Welcome to TokenScope
-        </div>
-        <Mono style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
-          You haven't connected a data source yet. Three quick steps:
-        </Mono>
-        <ol style={{
-          margin: "16px 0 16px 20px", color: C.text,
-          fontSize: 13, lineHeight: 1.8,
-        }}>
-          <li>Drop the wrapper into your Claude code:&nbsp;
-            <code style={{ color: C.accent }}>tokenscope/wrappers/tokenscope.js</code> (or .py)</li>
-          <li>Set <code style={{ color: C.accent }}>TOKENSCOPE_LOG_FILE=~/Dropbox/tokenscope/usage.jsonl</code> in your env</li>
-          <li>In Dropbox, right-click the file → Share → copy link → paste it below</li>
-        </ol>
+        <span>🎮 demo data — synthetic usage so you can click around without setup</span>
         <button type="button" onClick={onOpenSettings} style={{
-          background: C.accent, border: "none", color: C.bg,
-          borderRadius: 8, padding: "10px 18px", fontWeight: 600,
-          fontFamily: "'IBM Plex Mono', monospace", fontSize: 13,
-        }}>⚙ paste your dropbox link</button>
+          background: "transparent", border: `1px solid ${C.accent}55`,
+          color: C.accent, borderRadius: 6, padding: "3px 10px",
+          fontSize: 11, fontFamily: "'IBM Plex Mono', monospace",
+        }}>connect real data →</button>
       </div>
     );
 
@@ -1460,19 +1658,26 @@
       );
     };
 
+    const LS_SOURCE_KEY = "tokenscope.source";
+
     const App = () => {
       const isMobile = useIsMobile();
-      const [tab, setTab]     = useState("overview");
-      const [mode, setMode]   = useState("weighted");
-      const [winSel, setWin]  = useState("7d");
-      const [url, setUrl]     = useState(() => localStorage.getItem(LS_URL_KEY) || "");
+      const [tab, setTab]    = useState("overview");
+      const [mode, setMode]  = useState("weighted");
+      const [winSel, setWin] = useState("7d");
+      const [source, setSource] = useState(() =>
+        localStorage.getItem(LS_SOURCE_KEY) || "demo");
+      const [url, setUrl] = useState(() => localStorage.getItem(LS_URL_KEY) || "");
       const [autoRefresh, setAutoRefresh] = useState(() => {
         const raw = localStorage.getItem(LS_AUTOREFRESH_KEY);
         return raw === null ? true : raw === "1";
       });
-      // Open settings automatically on first run if no URL is configured.
-      const [settingsOpen, setSettingsOpen] = useState(() => !localStorage.getItem(LS_URL_KEY));
+      const [fileRows, setFileRows] = useState(null);
+      const [fileName, setFileName] = useState(null);
+      const [fileError, setFileError] = useState(null);
+      const [settingsOpen, setSettingsOpen] = useState(false);
 
+      useEffect(() => { localStorage.setItem(LS_SOURCE_KEY, source); }, [source]);
       useEffect(() => {
         if (url) localStorage.setItem(LS_URL_KEY, url);
         else     localStorage.removeItem(LS_URL_KEY);
@@ -1481,8 +1686,19 @@
         localStorage.setItem(LS_AUTOREFRESH_KEY, autoRefresh ? "1" : "0");
       }, [autoRefresh]);
 
-      const { rows, loading, error, fetchedAt, reload } = useRawLogs(url, autoRefresh);
+      const handleFilePick = (rows, name, err) => {
+        if (err)   { setFileError(err); return; }
+        if (!rows) { setFileError("file is empty or not parseable"); return; }
+        setFileError(null);
+        setFileRows(rows);
+        setFileName(name);
+      };
+
+      const { rows, loading, error, fetchedAt, reload } = useRawLogs({
+        source, url, fileRows, fileName, autoRefresh,
+      });
       const data = useUsageData(rows, winSel, mode);
+      const effectiveError = fileError || error;
 
       return (
         <div style={{
@@ -1494,26 +1710,36 @@
             windowSel={winSel} onWindowChange={setWin}
             mode={mode} onModeChange={setMode}
             onOpenSettings={() => setSettingsOpen(true)}
-            configured={!!url}
+            configured={true}
             fetchedAt={fetchedAt} onReload={reload} loading={loading} />
           {!isMobile && <TabBar tab={tab} onTabChange={setTab} variant="top" />}
+          {source === "demo" && (
+            <DemoBanner onOpenSettings={() => setSettingsOpen(true)} />
+          )}
           <ModeBar mode={mode} windowSel={winSel} isMobile={isMobile} />
 
           <main style={{
             padding: isMobile ? 16 : "28px 28px",
             maxWidth: 1360, margin: "0 auto",
           }}>
-            {!url && <SetupHelp onOpenSettings={() => setSettingsOpen(true)} />}
-            {url && loading && !data && <LoadingPanel label="loading log" />}
-            {url && error && (
-              <EmptyState title="Couldn't load the log file" accent={C.red} body={
+            {loading && !data && <LoadingPanel label="loading log" />}
+            {effectiveError && !data && (
+              <EmptyState title={
+                source === "dropbox" ? "Couldn't load Dropbox file"
+                : source === "file"  ? "No file selected yet"
+                : "Couldn't generate demo data"
+              } accent={C.red} body={
                 <>
-                  <div style={{ color: C.red, marginBottom: 8 }}>{error}</div>
-                  <div>Check that the Dropbox link is publicly shared and that the file exists.</div>
+                  <div style={{ color: C.red, marginBottom: 8 }}>{effectiveError}</div>
+                  <button type="button" onClick={() => setSettingsOpen(true)} style={{
+                    marginTop: 4, background: C.accent, border: "none", color: C.bg,
+                    borderRadius: 6, padding: "6px 14px", fontWeight: 600,
+                    fontFamily: "'IBM Plex Mono', monospace", fontSize: 12,
+                  }}>open settings</button>
                 </>
               } />
             )}
-            {url && !error && data && (
+            {!loading && !effectiveError && data && (
               <PageContent tab={tab} data={data} mode={mode}
                 windowSel={winSel} isMobile={isMobile} />
             )}
@@ -1523,9 +1749,11 @@
 
           {settingsOpen && (
             <SettingsPanel
+              source={source} onSourceChange={setSource}
               url={url} onUrlChange={setUrl}
+              fileName={fileName} onFilePick={handleFilePick}
               autoRefresh={autoRefresh} onAutoRefreshChange={setAutoRefresh}
-              fetchedAt={fetchedAt} error={error}
+              fetchedAt={fetchedAt} error={effectiveError}
               onClose={() => setSettingsOpen(false)} />
           )}
         </div>
