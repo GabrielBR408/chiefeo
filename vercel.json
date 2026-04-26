@@ -1,4 +1,7 @@
 {
+  "rewrites": [
+    { "source": "/pic-for-sale.html", "destination": "/pic-for-sale.html" }
+  ],
   "crons": [
     { "path": "/api/cron-expire-trash", "schedule": "0 3 * * *" }
   ]
