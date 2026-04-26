@@ -15,17 +15,54 @@
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=DM+Sans:wght@400;500;600;700&display=swap" />
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"
-    integrity="sha384-tMH8h3BGESGckSAVGZ82T9n90ztNXxvdwvdM6UoR56cYcf+0iGXBliJ29D+wZ/x8"
-    crossorigin="anonymous"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"
-    integrity="sha384-bm7MnzvK++ykSwVJ2tynSE5TRdN+xL418osEVF2DE/L/gfWHj91J2Sphe582B1Bh"
-    crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.min.js" crossorigin="anonymous"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"
-    integrity="sha384-ku9eM40vVDsFUiERorrdlHlF0LIhdfn716M7TntM72Uo98T7LWiogD3hNenPx8Q0"
-    crossorigin="anonymous"></script>
+  <!-- React + Recharts via CDN (UMD), Babel Standalone for in-browser JSX.
+       SRI integrity hashes intentionally omitted — when a hash drifts the
+       script silently fails and the splash screen freezes forever. The
+       CDNs themselves are HTTPS-pinned, which is the meaningful boundary
+       for a single-file mockup. -->
+  <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+  <script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+
+  <script>
+    // Visible error diagnostics — replaces the splash with the message so we
+    // never get stuck on a spinner if a CDN load or compile fails.
+    function tkShowError(label, detail) {
+      var el = document.getElementById("tk-splash");
+      if (!el) return;
+      el.classList.remove("hide");
+      el.style.transition = "none";
+      el.style.opacity = "1";
+      el.innerHTML =
+        '<div style="max-width:560px;padding:24px;color:#f87171;font-family:\'IBM Plex Mono\',monospace;text-align:left;">' +
+        '<div style="font-size:13px;letter-spacing:.15em;text-transform:uppercase;color:#f87171;margin-bottom:8px;">'
+          + label + '</div>' +
+        '<div style="font-size:13px;color:#e8eaf0;line-height:1.6;white-space:pre-wrap;word-break:break-word;">'
+          + String(detail) + '</div>' +
+        '<div style="font-size:11px;color:#7a88a8;margin-top:14px;line-height:1.6;">' +
+          'open the browser console (right-click → Inspect → Console) for the full stack. ' +
+          'most common cause is one of the CDN scripts failing to load.' +
+        '</div></div>';
+    }
+    window.addEventListener("error", function (e) {
+      tkShowError("script error", (e.message || "(no message)") +
+        "\nat " + (e.filename || "?") + ":" + (e.lineno || 0));
+    });
+    window.addEventListener("unhandledrejection", function (e) {
+      tkShowError("promise rejected",
+        e.reason && (e.reason.stack || e.reason.message) || String(e.reason));
+    });
+    // If React still hasn't mounted after 8s, something is wrong; surface it.
+    setTimeout(function () {
+      if (!window.__tkMounted) {
+        tkShowError("startup timeout",
+          "React didn't mount within 8s. Check that the CDN scripts loaded " +
+          "(Network tab) and that your network/extension isn't blocking unpkg.com or cdnjs.cloudflare.com.");
+      }
+    }, 8000);
+  </script>
 
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -1794,6 +1831,9 @@ await claudeCall({
 
     const root = ReactDOM.createRoot(document.getElementById("root"));
     root.render(<App />);
+
+    // Mark mounted so the 8s startup-timeout diagnostic stops watching.
+    window.__tkMounted = true;
 
     // Hide splash once React has mounted.
     requestAnimationFrame(() => {
