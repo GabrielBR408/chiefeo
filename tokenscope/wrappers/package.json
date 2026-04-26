@@ -1,0 +1,18 @@
+{
+  "name": "tokenscope-wrapper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Drop-in Anthropic SDK wrapper that mirrors every call into a Supabase usage_logs table for the TokenScope dashboard.",
+  "main": "tokenscope.js",
+  "exports": {
+    ".": "./tokenscope.js"
+  },
+  "scripts": {
+    "smoke": "node smoke.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}
