@@ -1,24 +1,36 @@
 // tokenscope.js — Node logging wrapper for the Anthropic SDK.
 //
-// Drop into any Node project, set the env vars below, and replace your
-// `anthropic.messages.create(...)` calls with `claudeCall({ tag, ... })`.
+// Drop-in replacement for `anthropic.messages.create(...)`. Every call is
+// mirrored into a log destination so the TokenScope dashboard can read it.
 //
-// Required env:
-//   ANTHROPIC_API_KEY        sk-ant-…
-//   SUPABASE_URL             https://xxxx.supabase.co
-//   SUPABASE_SERVICE_KEY     service-role key (server-side only — never ship to browser)
-//   TOKENSCOPE_USER_ID       UUID of the Supabase auth user that should own these logs
+// Two log destinations, configured by env vars (use either, or both):
 //
-// The Supabase insert is fire-and-forget: a logging failure never blocks or
-// throws into the caller. Errors print to stderr with a [TokenScope] prefix.
+//   FILE MODE (recommended for the single-file HTML dashboard on Dropbox):
+//     TOKENSCOPE_LOG_FILE   path to a .jsonl file the wrapper appends to.
+//                           e.g. ~/Dropbox/tokenscope/usage.jsonl
+//                           Parent directory is created if missing.
+//
+//   SUPABASE MODE (for the future hosted React dashboard):
+//     SUPABASE_URL          https://xxxx.supabase.co
+//     SUPABASE_SERVICE_KEY  service-role key (server-side only)
+//     TOKENSCOPE_USER_ID    UUID of the Supabase auth user owning the logs
+//
+// If neither destination is configured, the wrapper logs a one-time warning
+// and returns the API response normally — your code keeps working.
+//
+// Logging is fire-and-forget: a destination failure never blocks or throws
+// into the caller. Errors print to stderr with a [TokenScope] prefix.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { createClient } from "@supabase/supabase-js";
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 
 // ─── Pricing (USD per 1M tokens) ─────────────────────────────────────────────
 // Verify at https://docs.anthropic.com/en/docs/about-claude/pricing before
-// shipping — these change. Unknown models fall back to Sonnet pricing so cost
-// is never silently zero.
+// shipping — these change. Unknown models fall back to Sonnet pricing so
+// cost is never silently zero.
 export const PRICING = {
   "claude-opus-4-7":            { input: 15.00, output: 75.00, cache_read: 1.50,  cache_write: 18.75 },
   "claude-opus-4-6":            { input: 15.00, output: 75.00, cache_read: 1.50,  cache_write: 18.75 },
@@ -38,9 +50,26 @@ export function calculateCost(model, usage) {
   );
 }
 
-// ─── Lazy singletons ─────────────────────────────────────────────────────────
-// Built lazily so importing this module doesn't crash a process whose env
-// isn't fully populated yet (e.g. during tests).
+// ─── Destination wiring ──────────────────────────────────────────────────────
+
+function expandHome(p) {
+  if (!p) return p;
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return resolve(homedir(), p.slice(2));
+  return resolve(p);
+}
+
+function fileTarget() {
+  const raw = process.env.TOKENSCOPE_LOG_FILE;
+  return raw ? expandHome(raw) : null;
+}
+
+function supabaseEnv() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_KEY;
+  const uid = process.env.TOKENSCOPE_USER_ID;
+  return url && key && uid ? { url, key, uid } : null;
+}
 
 let _anthropic;
 function anthropic() {
@@ -48,17 +77,31 @@ function anthropic() {
   return _anthropic;
 }
 
+// Supabase client is loaded lazily and only if needed, so users on the
+// file-only path don't pay for the @supabase/supabase-js dep being resolved.
 let _supabase;
-function supabase() {
+async function supabase(env) {
   if (!_supabase) {
-    const url = process.env.SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_KEY;
-    if (!url || !key) {
-      throw new Error("[TokenScope] SUPABASE_URL and SUPABASE_SERVICE_KEY must be set");
-    }
-    _supabase = createClient(url, key, { auth: { persistSession: false } });
+    const { createClient } = await import("@supabase/supabase-js");
+    _supabase = createClient(env.url, env.key, { auth: { persistSession: false } });
   }
   return _supabase;
+}
+
+let _warned = false;
+function warnNoSink() {
+  if (_warned) return;
+  _warned = true;
+  console.warn(
+    "[TokenScope] No log destination configured. Set TOKENSCOPE_LOG_FILE " +
+    "(file mode) or SUPABASE_URL + SUPABASE_SERVICE_KEY + TOKENSCOPE_USER_ID " +
+    "(Supabase mode). API calls still work, but nothing is being recorded."
+  );
+}
+
+async function appendJsonl(file, row) {
+  await mkdir(dirname(file), { recursive: true });
+  await appendFile(file, JSON.stringify(row) + "\n", "utf8");
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -90,24 +133,49 @@ export async function claudeCall({
   };
   const cost_usd = calculateCost(model, tokens);
 
+  // Row shape is identical for both destinations — Supabase fills `id` and
+  // `created_at` on its side; the file-mode dashboard relies on the wrapper
+  // populating them. We populate both unconditionally, and Supabase happily
+  // accepts/ignores the explicit values when they're provided.
   const row = {
-    user_id:     process.env.TOKENSCOPE_USER_ID,
+    id:                  randomUUID(),
+    created_at:          new Date().toISOString(),
     tag,
     model,
-    stop_reason: response.stop_reason ?? null,
+    stop_reason:         response.stop_reason ?? null,
     ...tokens,
     cost_usd,
     duration_ms,
     metadata,
   };
 
-  // Fire-and-forget. Never throw out of here.
-  Promise.resolve()
-    .then(() => supabase().from("usage_logs").insert(row))
-    .then(({ error } = {}) => {
-      if (error) console.error("[TokenScope] log failed:", error.message);
-    })
-    .catch((e) => console.error("[TokenScope] log failed:", e?.message || e));
+  const file = fileTarget();
+  const sb   = supabaseEnv();
+
+  if (!file && !sb) {
+    warnNoSink();
+    return response;
+  }
+
+  if (file) {
+    appendJsonl(file, row).catch((e) =>
+      console.error("[TokenScope] file log failed:", e?.message || e)
+    );
+  }
+
+  if (sb) {
+    // Supabase row needs the user_id; the file row doesn't (single-user file).
+    const sbRow = { ...row, user_id: sb.uid };
+    Promise.resolve()
+      .then(() => supabase(sb))
+      .then((client) => client.from("usage_logs").insert(sbRow))
+      .then(({ error } = {}) => {
+        if (error) console.error("[TokenScope] supabase log failed:", error.message);
+      })
+      .catch((e) =>
+        console.error("[TokenScope] supabase log failed:", e?.message || e)
+      );
+  }
 
   return response;
 }
