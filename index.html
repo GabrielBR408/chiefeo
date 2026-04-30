@@ -342,16 +342,49 @@
        below are the *display* bands used to color a score badge; users who
        customize their server-side mappings may see a one-band visual drift on
        extreme overrides. The actual ranking math is unaffected. */
-    /* Brand palette — blue gradient pulled from the staircase logo, mapped
-       so a higher-priority chip is a deeper, more saturated blue. Red is
+    /* Brand palette — continuous blue gradient driven by the actual numeric
+       score, not the four-tier band, so a peak-priority task reads as
+       substantially darker than a borderline-high task. Score 0 fades to a
+       near-white blue tint; score 10 lands on a deep navy. Red is
        intentionally NOT in this palette: it stays reserved for OVERDUE
-       urgency states (a different axis from priority level). Suppress is
-       a neutral gray-blue so muted tasks don't compete visually. */
+       urgency states (a different axis from priority level). */
+    function scoreColors(score) {
+      // Clamp to [0, 10]. Linear interpolation between two RGB anchors —
+      // light "almost-white" tint at the bottom and deep navy at the top.
+      // Linear (not eased) keeps low-priority chips genuinely pale and lets
+      // the dark end stay visually heavy without crushing midtones into one
+      // muddy band.
+      const s = Math.max(0, Math.min(10, score));
+      const t = s / 10;
+      const r0 = 243, g0 = 248, b0 = 252; // pale blue tint
+      const r1 = 15,  g1 = 42,  b1 = 74;  // deep navy
+      const r = Math.round(r0 + (r1 - r0) * t);
+      const g = Math.round(g0 + (g1 - g0) * t);
+      const b = Math.round(b0 + (b1 - b0) * t);
+      // Border: darken bg ~28% so the left card stripe still reads on the
+      // pale end and intensifies into a distinct accent on the dark end.
+      const dr = Math.round(r * 0.72);
+      const dg = Math.round(g * 0.72);
+      const db = Math.round(b * 0.72);
+      // Foreground text: flip to white once the bg luminance dips below
+      // a contrast-safe threshold (perceptual luminance, not naive avg).
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      return {
+        bg:     `rgb(${r},${g},${b})`,
+        fg:     lum < 0.55 ? "#FFFFFF" : "#1E3A5F",
+        border: `rgb(${dr},${dg},${db})`,
+      };
+    }
+
+    /* Tier picker buttons / keyword chips / due-date defaults grid still
+       use a categorical palette — but each entry is sampled from
+       scoreColors() at the band's midpoint so categorical UI and
+       score-driven cards land on the same gradient. */
     const TIER_COLOR = {
-      "High":     { bg: "#BFDBFE", fg: "#1E3A5F", border: "#2B5F8A" }, // dark blue
-      "Medium":   { bg: "#DBEAFE", fg: "#2B5F8A", border: "#4A8DB8" }, // medium blue
-      "Low":      { bg: "#EFF6FB", fg: "#4A8DB8", border: "#7CB4D4" }, // light blue
-      "Suppress": { bg: "#F1F5F9", fg: "#64748B", border: "#CBD5E1" }, // neutral
+      "High":     scoreColors(7.75), // midpoint of [5.5, 10]
+      "Medium":   scoreColors(4.25), // midpoint of [3.0, 5.5]
+      "Low":      scoreColors(2.0),  // midpoint of [1.0, 3.0]
+      "Suppress": scoreColors(0.5),  // midpoint of [0.0, 1.0]
     };
     const TIER_LABEL_SHORT = { "High": "HIGH", "Medium": "MED", "Low": "LOW", "Suppress": "MUTE" };
 
@@ -363,11 +396,12 @@
       return "Suppress";
     }
 
-    /* Color helpers — all derived from the band, so list colors and
-       graph colors stay in lockstep with the engine. */
-    function borderColor(score) { return TIER_COLOR[bandFromScore(score)].border; }
-    function scoreBg(score)     { return TIER_COLOR[bandFromScore(score)].bg; }
-    function scoreColor(score)  { return TIER_COLOR[bandFromScore(score)].fg; }
+    /* Color helpers — driven by the continuous score (not the band) so
+       the card stripe / score badge / chip color reflects the actual
+       priority value, not just the bucket it falls into. */
+    function borderColor(score) { return scoreColors(score).border; }
+    function scoreBg(score)     { return scoreColors(score).bg; }
+    function scoreColor(score)  { return scoreColors(score).fg; }
 
     /* ══════════════ Scoring API client ══════════════
        The keyword library + tier/sender combination logic + due-date defaults
@@ -1467,9 +1501,9 @@
           return { y: yTop, h: Math.max(0, yBot - yTop), color, alpha };
         };
         const bands = [
-          bandFill(10,  5.5, "#2B5F8A", 0.20), // High - dark blue
-          bandFill(5.5, 3.0, "#4A8DB8", 0.20), // Medium
-          bandFill(3.0, 1.0, "#7CB4D4", 0.20), // Low - light blue
+          bandFill(10,  5.5, "#0F2A4A", 0.32), // High - deep navy, heaviest tint
+          bandFill(5.5, 3.0, "#4A8DB8", 0.24), // Medium
+          bandFill(3.0, 1.0, "#7CB4D4", 0.18), // Low - light blue, faintest
         ];
 
         // Today marker (within the window)
