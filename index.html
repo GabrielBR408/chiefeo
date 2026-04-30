@@ -89,17 +89,12 @@
 <body>
   <!-- Splash / loading screen — removed by /icons inline boot script once React mounts. -->
   <div id="chiefeo-splash" role="status" aria-label="Loading ChiefEO">
-    <svg class="splash-icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <defs>
-        <linearGradient id="splashBg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#3b82f6"/>
-          <stop offset="100%" stop-color="#2563eb"/>
-        </linearGradient>
-      </defs>
-      <rect width="1024" height="1024" rx="224" ry="224" fill="url(#splashBg)"/>
-      <rect x="222" y="280" width="580" height="130" rx="65" ry="65" fill="#ffffff"/>
-      <rect x="222" y="447" width="440" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.78"/>
-      <rect x="222" y="614" width="300" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.58"/>
+    <svg class="splash-icon" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="13" y="62" width="26" height="50" rx="4" fill="#7CB4D4"/>
+      <rect x="47" y="38" width="26" height="74" rx="4" fill="#4A8DB8"/>
+      <rect x="81" y="14" width="26" height="98" rx="4" fill="#2B5F8A"/>
+      <path d="M 13 110 L 13 62 L 47 62 L 47 38 L 81 38 L 81 14 L 107 14"
+            fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
     <div class="splash-title">ChiefEO<sup>&trade;</sup></div>
     <div class="splash-spinner" aria-hidden="true"></div>
@@ -347,11 +342,16 @@
        below are the *display* bands used to color a score badge; users who
        customize their server-side mappings may see a one-band visual drift on
        extreme overrides. The actual ranking math is unaffected. */
+    /* Brand palette — blue gradient pulled from the staircase logo, mapped
+       so a higher-priority chip is a deeper, more saturated blue. Red is
+       intentionally NOT in this palette: it stays reserved for OVERDUE
+       urgency states (a different axis from priority level). Suppress is
+       a neutral gray-blue so muted tasks don't compete visually. */
     const TIER_COLOR = {
-      "High":     { bg: "#fee2e2", fg: "#b91c1c", border: "#fca5a5" },
-      "Medium":   { bg: "#fef3c7", fg: "#92400e", border: "#fcd34d" },
-      "Low":      { bg: "#e0e7ff", fg: "#3730a3", border: "#a5b4fc" },
-      "Suppress": { bg: "#e5e7eb", fg: "#4b5563", border: "#9ca3af" },
+      "High":     { bg: "#BFDBFE", fg: "#1E3A5F", border: "#2B5F8A" }, // dark blue
+      "Medium":   { bg: "#DBEAFE", fg: "#2B5F8A", border: "#4A8DB8" }, // medium blue
+      "Low":      { bg: "#EFF6FB", fg: "#4A8DB8", border: "#7CB4D4" }, // light blue
+      "Suppress": { bg: "#F1F5F9", fg: "#64748B", border: "#CBD5E1" }, // neutral
     };
     const TIER_LABEL_SHORT = { "High": "HIGH", "Medium": "MED", "Low": "LOW", "Suppress": "MUTE" };
 
@@ -486,7 +486,14 @@
         <div style={{ maxWidth: 430, margin: "0 auto", minHeight: "100vh", background: "#f8fafc", display: "flex", flexDirection: "column", boxShadow: "0 0 40px rgba(0,0,0,0.12)" }}>
           {/* Header */}
           <div style={{ background: "linear-gradient(135deg, #1e293b 0%, #334155 100%)", padding: "48px 24px 36px 24px", textAlign: "center" }}>
-            <div style={{ fontSize: "32px", fontWeight: "800", color: "#fff", letterSpacing: "-0.5px" }}>Chief<span style={{ color: "#38bdf8" }}>EO</span></div>
+            <svg width="56" height="56" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style={{ display: "block", margin: "0 auto 12px" }}>
+              <rect x="13" y="62" width="26" height="50" rx="4" fill="#7CB4D4"/>
+              <rect x="47" y="38" width="26" height="74" rx="4" fill="#4A8DB8"/>
+              <rect x="81" y="14" width="26" height="98" rx="4" fill="#2B5F8A"/>
+              <path d="M 13 110 L 13 62 L 47 62 L 47 38 L 81 38 L 81 14 L 107 14"
+                    fill="none" stroke="#ffffff" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <div style={{ fontSize: "32px", fontWeight: "800", color: "#fff", letterSpacing: "-0.5px" }}>ChiefEO</div>
             <div style={{ fontSize: "14px", color: "#94a3b8", marginTop: "6px", fontWeight: "500" }}>Your tasks. Auto-prioritized.</div>
           </div>
 
@@ -1014,14 +1021,18 @@
         header: { background: "linear-gradient(135deg, #1e293b 0%, #334155 100%)", padding: "16px 20px 0 20px", position: "relative" },
         headerTop: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" },
         title: { fontSize: "22px", fontWeight: "700", color: "#fff", letterSpacing: "-0.3px", display: "flex", alignItems: "center", gap: "8px" },
-        titleIcon: { width: "24px", height: "24px", flexShrink: 0, display: "block" },
+        titleIcon: { width: "30px", height: "30px", flexShrink: 0, display: "block" },
         titleTm: { fontSize: "10px", fontWeight: "600", color: "#94a3b8", verticalAlign: "super", marginLeft: "1px", letterSpacing: 0 },
         subtitle: { fontSize: "12px", color: "#94a3b8", fontWeight: "500", marginTop: "1px" },
         dateBadge: { background: "rgba(255,255,255,0.15)", borderRadius: "10px", padding: "6px 12px", display: "flex", flexDirection: "column", alignItems: "center" },
         dateMonth: { fontSize: "10px", color: "#94a3b8", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.5px" },
         dateDay: { fontSize: "18px", color: "#fff", fontWeight: "700", lineHeight: "1.1" },
         cards: { display: "flex", gap: "8px", padding: "14px 0 16px 0" },
-        summaryCard: (bg, isActive, isDimmed) => ({ flex: 1, background: bg, borderRadius: "12px", padding: "10px 12px", textAlign: "center", cursor: "pointer", transition: "all 0.15s ease", userSelect: "none", border: isActive ? "2px solid" : "2px solid transparent", borderColor: isActive ? (bg === "#fef2f2" ? "#ef4444" : bg === "#fffbeb" ? "#f59e0b" : "#3b82f6") : "transparent", transform: isActive ? "scale(0.96)" : "scale(1)", opacity: isDimmed ? 0.45 : 1, boxShadow: isActive ? "inset 0 2px 6px rgba(0,0,0,0.08)" : "none" }),
+        // Active-border color is keyed off bg so each summary card highlights
+        // in its own accent. #fef2f2 = Overdue (red, urgency), #DBEAFE = Due
+        // Today (medium blue), #EFF6FB = This Week (light blue) — last two
+        // pulled from the brand priority palette.
+        summaryCard: (bg, isActive, isDimmed) => ({ flex: 1, background: bg, borderRadius: "12px", padding: "10px 12px", textAlign: "center", cursor: "pointer", transition: "all 0.15s ease", userSelect: "none", border: isActive ? "2px solid" : "2px solid transparent", borderColor: isActive ? (bg === "#fef2f2" ? "#ef4444" : bg === "#DBEAFE" ? "#2B5F8A" : "#4A8DB8") : "transparent", transform: isActive ? "scale(0.96)" : "scale(1)", opacity: isDimmed ? 0.45 : 1, boxShadow: isActive ? "inset 0 2px 6px rgba(0,0,0,0.08)" : "none" }),
         summaryCount: (color) => ({ fontSize: "22px", fontWeight: "700", color, lineHeight: "1.2" }),
         summaryLabel: { fontSize: "11px", color: "#64748b", fontWeight: "500", marginTop: "2px" },
         list: { flex: 1, overflowY: "auto", padding: "8px 16px", paddingBottom: "140px" },
@@ -1456,9 +1467,9 @@
           return { y: yTop, h: Math.max(0, yBot - yTop), color, alpha };
         };
         const bands = [
-          bandFill(10,  5.5, "#fee2e2", 0.55), // High
-          bandFill(5.5, 3.0, "#fef3c7", 0.55), // Medium
-          bandFill(3.0, 1.0, "#e0e7ff", 0.55), // Low
+          bandFill(10,  5.5, "#2B5F8A", 0.20), // High - dark blue
+          bandFill(5.5, 3.0, "#4A8DB8", 0.20), // Medium
+          bandFill(3.0, 1.0, "#7CB4D4", 0.20), // Low - light blue
         ];
 
         // Today marker (within the window)
@@ -1627,9 +1638,9 @@
                 <rect key={i} x={VB.padL} y={b.y} width={plotW} height={b.h} fill={b.color} opacity={b.alpha} />
               ))}
               {/* Y-axis labels (band names, sentence-cased on the left) */}
-              <text x={4}  y={py(7.75) + 4} fontSize="10" fill="#b91c1c" fontWeight="700" fontFamily="Inter, sans-serif">High</text>
-              <text x={4}  y={py(4.25) + 4} fontSize="10" fill="#92400e" fontWeight="700" fontFamily="Inter, sans-serif">Med</text>
-              <text x={4}  y={py(2.0)  + 4} fontSize="10" fill="#3730a3" fontWeight="700" fontFamily="Inter, sans-serif">Low</text>
+              <text x={4}  y={py(7.75) + 4} fontSize="10" fill="#1E3A5F" fontWeight="700" fontFamily="Inter, sans-serif">High</text>
+              <text x={4}  y={py(4.25) + 4} fontSize="10" fill="#2B5F8A" fontWeight="700" fontFamily="Inter, sans-serif">Med</text>
+              <text x={4}  y={py(2.0)  + 4} fontSize="10" fill="#4A8DB8" fontWeight="700" fontFamily="Inter, sans-serif">Low</text>
               {/* Plot frame */}
               <line x1={VB.padL} y1={VB.padT} x2={VB.padL} y2={VB.padT + plotH} stroke="#cbd5e1" strokeWidth="0.5" />
               <line x1={VB.padL} y1={VB.padT + plotH} x2={VB.padL + plotW} y2={VB.padT + plotH} stroke="#cbd5e1" strokeWidth="0.5" />
@@ -2107,11 +2118,18 @@
             <div style={S.headerTop}>
               <div>
                 <div style={S.title}>
-                  <svg style={S.titleIcon} viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                    <rect width="1024" height="1024" rx="224" ry="224" fill="#3b82f6"/>
-                    <rect x="222" y="280" width="580" height="130" rx="65" ry="65" fill="#ffffff"/>
-                    <rect x="222" y="447" width="440" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.78"/>
-                    <rect x="222" y="614" width="300" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.58"/>
+                  {/* Staircase logo — three blue bars with a white stair-step
+                      line tracing the upper-left edges. Transparent
+                      background so the navy header shows through. The
+                      legacy horizontal-bars-on-blue-tile favicon is still
+                      shipped under /icons/ for PWA install contexts and
+                      isn't touched here. */}
+                  <svg style={S.titleIcon} viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <rect x="13" y="62" width="26" height="50" rx="4" fill="#7CB4D4"/>
+                    <rect x="47" y="38" width="26" height="74" rx="4" fill="#4A8DB8"/>
+                    <rect x="81" y="14" width="26" height="98" rx="4" fill="#2B5F8A"/>
+                    <path d="M 13 110 L 13 62 L 47 62 L 47 38 L 81 38 L 81 14 L 107 14"
+                          fill="none" stroke="#ffffff" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
                   <span>ChiefEO<span style={S.titleTm}>&trade;</span></span>
                 </div>
@@ -2172,22 +2190,22 @@
                 <div style={S.summaryLabel}>Overdue</div>
                 {summaryFilter === "overdue" && <div style={{ fontSize: "9px", color: "#ef4444", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
               </div>
-              <div style={S.summaryCard("#fffbeb", summaryFilter === "dueToday", summaryFilter && summaryFilter !== "dueToday")} onClick={() => { toggleFilter("dueToday"); if (tab !== "active") { setTab("active"); setExpandedId(null); } }}>
-                <div style={S.summaryCount("#f59e0b")}>{dueTodayCount}</div>
+              <div style={S.summaryCard("#DBEAFE", summaryFilter === "dueToday", summaryFilter && summaryFilter !== "dueToday")} onClick={() => { toggleFilter("dueToday"); if (tab !== "active") { setTab("active"); setExpandedId(null); } }}>
+                <div style={S.summaryCount("#2B5F8A")}>{dueTodayCount}</div>
                 <div style={S.summaryLabel}>Due Today</div>
-                {summaryFilter === "dueToday" && <div style={{ fontSize: "9px", color: "#f59e0b", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
+                {summaryFilter === "dueToday" && <div style={{ fontSize: "9px", color: "#2B5F8A", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
               </div>
-              <div style={S.summaryCard("#eff6ff", summaryFilter === "thisWeek", summaryFilter && summaryFilter !== "thisWeek")} onClick={() => { toggleFilter("thisWeek"); if (tab !== "active") { setTab("active"); setExpandedId(null); } }}>
-                <div style={S.summaryCount("#3b82f6")}>{thisWeekCount}</div>
+              <div style={S.summaryCard("#EFF6FB", summaryFilter === "thisWeek", summaryFilter && summaryFilter !== "thisWeek")} onClick={() => { toggleFilter("thisWeek"); if (tab !== "active") { setTab("active"); setExpandedId(null); } }}>
+                <div style={S.summaryCount("#4A8DB8")}>{thisWeekCount}</div>
                 <div style={S.summaryLabel}>This Week</div>
-                {summaryFilter === "thisWeek" && <div style={{ fontSize: "9px", color: "#3b82f6", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
+                {summaryFilter === "thisWeek" && <div style={{ fontSize: "9px", color: "#4A8DB8", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
               </div>
             </div>
           </div>
 
           {summaryFilter && tab === "active" && (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 20px 0 20px", background: "#f8fafc" }}>
-              <div style={{ fontSize: "13px", fontWeight: "600", color: "#475569" }}>Showing: <span style={{ color: summaryFilter === "overdue" ? "#ef4444" : summaryFilter === "dueToday" ? "#f59e0b" : "#3b82f6" }}>{filterLabel} ({filterCount})</span></div>
+              <div style={{ fontSize: "13px", fontWeight: "600", color: "#475569" }}>Showing: <span style={{ color: summaryFilter === "overdue" ? "#ef4444" : summaryFilter === "dueToday" ? "#2B5F8A" : "#4A8DB8" }}>{filterLabel} ({filterCount})</span></div>
               <button onClick={() => setSummaryFilter(null)} style={{ background: "#e2e8f0", border: "none", borderRadius: "8px", padding: "4px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", cursor: "pointer", fontFamily: "Inter, sans-serif", display: "flex", alignItems: "center", gap: "4px" }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>Clear
               </button>
