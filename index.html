@@ -1354,14 +1354,27 @@
                   <EditForm
                     task={task}
                     onTaskChange={(changes) => updateTask(task.id, changes)}
-                    onDone={() => {
-                      setExiting("done");
-                      recordCompletion(task.id);
-                      setTimeout(() => {
-                        updateTask(task.id, { complete: true });
+                    onSave={(markComplete) => {
+                      // Three branches:
+                      //  1. user wants to complete a non-complete task → slide-out + complete
+                      //  2. user wants to reopen a completed task → uncheck the flag, close
+                      //  3. nothing changed re. completion → just close the panel
+                      if (markComplete && !task.complete) {
+                        setExiting("done");
+                        recordCompletion(task.id);
+                        setTimeout(() => {
+                          updateTask(task.id, { complete: true });
+                          setExpandedId(null);
+                          showToast("Marked complete!");
+                        }, 280);
+                      } else if (!markComplete && task.complete) {
+                        updateTask(task.id, { complete: false });
                         setExpandedId(null);
-                        showToast("Done!");
-                      }, 280);
+                        showToast("Task reopened");
+                      } else {
+                        setExpandedId(null);
+                        showToast("Saved");
+                      }
                     }}
                     onTrash={() => {
                       setExiting("trash");
@@ -1662,7 +1675,7 @@
       }
 
       /* ── Edit Form ── */
-      function EditForm({ task, onTaskChange, onDone, onTrash }) {
+      function EditForm({ task, onTaskChange, onSave, onTrash }) {
         // Local state mirrors task fields so we can render input changes
         // smoothly. onTaskChange is called when a value should be persisted:
         // - immediately on date pickers (one event per pick)
@@ -1672,6 +1685,13 @@
         const [sp, setSp]               = useState(task.startPriority);
         const [pp, setPp]               = useState(task.peakPriority);
         const [postpone, setPostpone]   = useState(task.postponeUntil ? toISO(task.postponeUntil) : "");
+        // Local toggle for the "Mark as Complete" checkbox at the top of the
+        // edit form. Initialized from the task's current state so editing a
+        // completed task shows the checkbox already on. Doesn't hit the
+        // server until the user clicks Save Changes — this is the one piece
+        // of edit state that intentionally is NOT auto-saved, so saving
+        // edits never marks a task complete by accident.
+        const [markComplete, setMarkComplete] = useState(!!task.complete);
 
         const fieldStyle = { width: "100%", padding: "10px 12px", borderRadius: "10px", border: "1px solid #e2e8f0", fontSize: "14px", fontFamily: "Inter, sans-serif", outline: "none", marginTop: "4px" };
         const labelStyle = { fontSize: "12px", color: "#64748b", fontWeight: "600", display: "block", marginTop: "12px" };
@@ -1703,6 +1723,59 @@
 
         return (
           <div style={{ padding: "8px 0" }} onClick={(e) => e.stopPropagation()}>
+            {/* Mark-as-Complete toggle — sits at the very top in its own
+                highlighted (green) container so it reads as a status decision
+                separate from the edit fields below. Tapping anywhere on the
+                row toggles the checkbox state. The actual completion is
+                committed when the user taps Save Changes; this checkbox does
+                NOT auto-save, by design — auto-saving completion was the
+                exact ambiguity this UI resolves. */}
+            <div
+              role="checkbox"
+              tabIndex={0}
+              aria-checked={markComplete}
+              onClick={() => setMarkComplete(v => !v)}
+              onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); setMarkComplete(v => !v); } }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+                padding: "12px 14px",
+                borderRadius: "12px",
+                marginTop: "4px",
+                marginBottom: "4px",
+                cursor: "pointer",
+                background: markComplete ? "#dcfce7" : "#f0fdf4",
+                border: "1.5px solid " + (markComplete ? "#22c55e" : "#bbf7d0"),
+                userSelect: "none",
+                fontFamily: "Inter, sans-serif",
+              }}
+            >
+              <div style={{
+                width: "22px",
+                height: "22px",
+                borderRadius: "6px",
+                background: markComplete ? "#22c55e" : "#fff",
+                border: "2px solid " + (markComplete ? "#22c55e" : "#86efac"),
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#fff",
+                flexShrink: 0,
+                transition: "background 0.15s ease, border-color 0.15s ease",
+              }}>
+                {markComplete && <CheckIcon />}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: "14px", fontWeight: "700", color: "#166534", lineHeight: 1.2 }}>Mark as Complete</div>
+                <div style={{ fontSize: "11px", color: "#15803d", marginTop: "2px", lineHeight: 1.3 }}>
+                  {markComplete
+                    ? (task.complete ? "Already completed — uncheck to reopen this task." : "This task will be marked done when you tap Save Changes.")
+                    : "Saving edits won't mark the task complete — check this if you want it done."}
+                </div>
+              </div>
+            </div>
+
             {/* Native <input type="date"> is rendered by the browser/OS in a
                 fixed locale format (e.g. "Apr 20, 2026" on iOS). To show our
                 "Monday, Apr 20" format, overlay our own text on top of a
@@ -1748,10 +1821,10 @@
             <input type="date" style={fieldStyle} value={postpone} onChange={e => handlePostpone(e.target.value)} />
 
             <button
-              onClick={onDone}
-              style={{ width: "100%", marginTop: "20px", padding: "16px", borderRadius: "12px", border: "none", background: "#22c55e", color: "#fff", fontSize: "17px", fontWeight: "700", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", boxShadow: "0 2px 8px rgba(34,197,94,0.35)", fontFamily: "Inter, sans-serif" }}
+              onClick={() => onSave(markComplete)}
+              style={{ width: "100%", marginTop: "20px", padding: "16px", borderRadius: "12px", border: "none", background: "#3b82f6", color: "#fff", fontSize: "17px", fontWeight: "700", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", boxShadow: "0 2px 8px rgba(59,130,246,0.35)", fontFamily: "Inter, sans-serif" }}
             >
-              <CheckIcon /> Done
+              Save Changes
             </button>
             <button
               onClick={onTrash}
