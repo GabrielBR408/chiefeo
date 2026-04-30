@@ -133,6 +133,13 @@ async function handlePost(req, res, USER_ID, USER_LABEL) {
       postpone_until: t.postpone_until || null,
       complete: false,
       trashed: false,
+      // Tasks coming through this API are scored by the intake skill (Gmail
+      // sender + keyword + due-date defaults). Flag both fields as auto so
+      // the web app can render the "auto-generated" indicator next to them
+      // until the user edits one. Skill payloads can override either flag
+      // explicitly if they ever ship a manually-curated task.
+      due_date_auto: t.due_date_auto ?? true,
+      priority_auto: t.priority_auto ?? true,
     };
 
     try {

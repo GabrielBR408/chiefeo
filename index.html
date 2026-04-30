@@ -89,17 +89,12 @@
 <body>
   <!-- Splash / loading screen — removed by /icons inline boot script once React mounts. -->
   <div id="chiefeo-splash" role="status" aria-label="Loading ChiefEO">
-    <svg class="splash-icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <defs>
-        <linearGradient id="splashBg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#3b82f6"/>
-          <stop offset="100%" stop-color="#2563eb"/>
-        </linearGradient>
-      </defs>
-      <rect width="1024" height="1024" rx="224" ry="224" fill="url(#splashBg)"/>
-      <rect x="222" y="280" width="580" height="130" rx="65" ry="65" fill="#ffffff"/>
-      <rect x="222" y="447" width="440" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.78"/>
-      <rect x="222" y="614" width="300" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.58"/>
+    <svg class="splash-icon" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="13" y="62" width="26" height="50" rx="4" fill="#7CB4D4"/>
+      <rect x="47" y="38" width="26" height="74" rx="4" fill="#4A8DB8"/>
+      <rect x="81" y="14" width="26" height="98" rx="4" fill="#2B5F8A"/>
+      <path d="M 13 110 L 13 62 L 47 62 L 47 38 L 81 38 L 81 14 L 107 14"
+            fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
     <div class="splash-title">ChiefEO<sup>&trade;</sup></div>
     <div class="splash-spinner" aria-hidden="true"></div>
@@ -166,6 +161,10 @@
         trashed:       row.trashed,
         completedAt:   row.completed_at || null,
         trashedAt:     row.trashed_at || null,
+        // Auto-vs-manual provenance for the small "auto" indicator beside
+        // due-date / priority values. NULL/missing → false (legacy rows).
+        dueDateAuto:   row.due_date_auto === true,
+        priorityAuto:  row.priority_auto === true,
       };
     }
 
@@ -182,6 +181,8 @@
         trashed:        task.trashed ?? false,
         completed_at:   task.completedAt || null,
         trashed_at:     task.trashedAt || null,
+        due_date_auto:  task.dueDateAuto ?? false,
+        priority_auto:  task.priorityAuto ?? false,
       };
     }
 
@@ -221,6 +222,8 @@
       if (changes.trashed       !== undefined) dbChanges.trashed        = changes.trashed;
       if (changes.completedAt   !== undefined) dbChanges.completed_at   = changes.completedAt;
       if (changes.trashedAt     !== undefined) dbChanges.trashed_at     = changes.trashedAt;
+      if (changes.dueDateAuto   !== undefined) dbChanges.due_date_auto  = changes.dueDateAuto;
+      if (changes.priorityAuto  !== undefined) dbChanges.priority_auto  = changes.priorityAuto;
       const { error } = await sb
         .from("tasks")
         .update(dbChanges)
@@ -339,11 +342,49 @@
        below are the *display* bands used to color a score badge; users who
        customize their server-side mappings may see a one-band visual drift on
        extreme overrides. The actual ranking math is unaffected. */
+    /* Brand palette — continuous blue gradient driven by the actual numeric
+       score, not the four-tier band, so a peak-priority task reads as
+       substantially darker than a borderline-high task. Score 0 fades to a
+       near-white blue tint; score 10 lands on a deep navy. Red is
+       intentionally NOT in this palette: it stays reserved for OVERDUE
+       urgency states (a different axis from priority level). */
+    function scoreColors(score) {
+      // Clamp to [0, 10]. Linear interpolation between two RGB anchors —
+      // light "almost-white" tint at the bottom and deep navy at the top.
+      // Linear (not eased) keeps low-priority chips genuinely pale and lets
+      // the dark end stay visually heavy without crushing midtones into one
+      // muddy band.
+      const s = Math.max(0, Math.min(10, score));
+      const t = s / 10;
+      const r0 = 243, g0 = 248, b0 = 252; // pale blue tint
+      const r1 = 15,  g1 = 42,  b1 = 74;  // deep navy
+      const r = Math.round(r0 + (r1 - r0) * t);
+      const g = Math.round(g0 + (g1 - g0) * t);
+      const b = Math.round(b0 + (b1 - b0) * t);
+      // Border: darken bg ~28% so the left card stripe still reads on the
+      // pale end and intensifies into a distinct accent on the dark end.
+      const dr = Math.round(r * 0.72);
+      const dg = Math.round(g * 0.72);
+      const db = Math.round(b * 0.72);
+      // Foreground text: flip to white once the bg luminance dips below
+      // a contrast-safe threshold (perceptual luminance, not naive avg).
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      return {
+        bg:     `rgb(${r},${g},${b})`,
+        fg:     lum < 0.55 ? "#FFFFFF" : "#1E3A5F",
+        border: `rgb(${dr},${dg},${db})`,
+      };
+    }
+
+    /* Tier picker buttons / keyword chips / due-date defaults grid still
+       use a categorical palette — but each entry is sampled from
+       scoreColors() at the band's midpoint so categorical UI and
+       score-driven cards land on the same gradient. */
     const TIER_COLOR = {
-      "High":     { bg: "#fee2e2", fg: "#b91c1c", border: "#fca5a5" },
-      "Medium":   { bg: "#fef3c7", fg: "#92400e", border: "#fcd34d" },
-      "Low":      { bg: "#e0e7ff", fg: "#3730a3", border: "#a5b4fc" },
-      "Suppress": { bg: "#e5e7eb", fg: "#4b5563", border: "#9ca3af" },
+      "High":     scoreColors(7.75), // midpoint of [5.5, 10]
+      "Medium":   scoreColors(4.25), // midpoint of [3.0, 5.5]
+      "Low":      scoreColors(2.0),  // midpoint of [1.0, 3.0]
+      "Suppress": scoreColors(0.5),  // midpoint of [0.0, 1.0]
     };
     const TIER_LABEL_SHORT = { "High": "HIGH", "Medium": "MED", "Low": "LOW", "Suppress": "MUTE" };
 
@@ -355,11 +396,12 @@
       return "Suppress";
     }
 
-    /* Color helpers — all derived from the band, so list colors and
-       graph colors stay in lockstep with the engine. */
-    function borderColor(score) { return TIER_COLOR[bandFromScore(score)].border; }
-    function scoreBg(score)     { return TIER_COLOR[bandFromScore(score)].bg; }
-    function scoreColor(score)  { return TIER_COLOR[bandFromScore(score)].fg; }
+    /* Color helpers — driven by the continuous score (not the band) so
+       the card stripe / score badge / chip color reflects the actual
+       priority value, not just the bucket it falls into. */
+    function borderColor(score) { return scoreColors(score).border; }
+    function scoreBg(score)     { return scoreColors(score).bg; }
+    function scoreColor(score)  { return scoreColors(score).fg; }
 
     /* ══════════════ Scoring API client ══════════════
        The keyword library + tier/sender combination logic + due-date defaults
@@ -478,7 +520,14 @@
         <div style={{ maxWidth: 430, margin: "0 auto", minHeight: "100vh", background: "#f8fafc", display: "flex", flexDirection: "column", boxShadow: "0 0 40px rgba(0,0,0,0.12)" }}>
           {/* Header */}
           <div style={{ background: "linear-gradient(135deg, #1e293b 0%, #334155 100%)", padding: "48px 24px 36px 24px", textAlign: "center" }}>
-            <div style={{ fontSize: "32px", fontWeight: "800", color: "#fff", letterSpacing: "-0.5px" }}>Chief<span style={{ color: "#38bdf8" }}>EO</span></div>
+            <svg width="56" height="56" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style={{ display: "block", margin: "0 auto 12px" }}>
+              <rect x="13" y="62" width="26" height="50" rx="4" fill="#7CB4D4"/>
+              <rect x="47" y="38" width="26" height="74" rx="4" fill="#4A8DB8"/>
+              <rect x="81" y="14" width="26" height="98" rx="4" fill="#2B5F8A"/>
+              <path d="M 13 110 L 13 62 L 47 62 L 47 38 L 81 38 L 81 14 L 107 14"
+                    fill="none" stroke="#ffffff" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <div style={{ fontSize: "32px", fontWeight: "800", color: "#fff", letterSpacing: "-0.5px" }}>ChiefEO</div>
             <div style={{ fontSize: "14px", color: "#94a3b8", marginTop: "6px", fontWeight: "500" }}>Your tasks. Auto-prioritized.</div>
           </div>
 
@@ -830,6 +879,12 @@
             postponeUntil: null,
             complete: false,
             trashed: false,
+            // Manual Quick-Add: user picked the tier and (optionally) the
+            // due date. If they typed a date, it's manual. If they took
+            // the tier-default, it's still tier-driven by their pick — the
+            // user owns it either way, so flag both as user-set.
+            dueDateAuto: false,
+            priorityAuto: false,
           };
           const inserted = await dbInsertTask(newTask, user.id);
           setTasks(prev => [inserted, ...prev]);
@@ -1000,14 +1055,18 @@
         header: { background: "linear-gradient(135deg, #1e293b 0%, #334155 100%)", padding: "16px 20px 0 20px", position: "relative" },
         headerTop: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" },
         title: { fontSize: "22px", fontWeight: "700", color: "#fff", letterSpacing: "-0.3px", display: "flex", alignItems: "center", gap: "8px" },
-        titleIcon: { width: "24px", height: "24px", flexShrink: 0, display: "block" },
+        titleIcon: { width: "30px", height: "30px", flexShrink: 0, display: "block" },
         titleTm: { fontSize: "10px", fontWeight: "600", color: "#94a3b8", verticalAlign: "super", marginLeft: "1px", letterSpacing: 0 },
         subtitle: { fontSize: "12px", color: "#94a3b8", fontWeight: "500", marginTop: "1px" },
         dateBadge: { background: "rgba(255,255,255,0.15)", borderRadius: "10px", padding: "6px 12px", display: "flex", flexDirection: "column", alignItems: "center" },
         dateMonth: { fontSize: "10px", color: "#94a3b8", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.5px" },
         dateDay: { fontSize: "18px", color: "#fff", fontWeight: "700", lineHeight: "1.1" },
         cards: { display: "flex", gap: "8px", padding: "14px 0 16px 0" },
-        summaryCard: (bg, isActive, isDimmed) => ({ flex: 1, background: bg, borderRadius: "12px", padding: "10px 12px", textAlign: "center", cursor: "pointer", transition: "all 0.15s ease", userSelect: "none", border: isActive ? "2px solid" : "2px solid transparent", borderColor: isActive ? (bg === "#fef2f2" ? "#ef4444" : bg === "#fffbeb" ? "#f59e0b" : "#3b82f6") : "transparent", transform: isActive ? "scale(0.96)" : "scale(1)", opacity: isDimmed ? 0.45 : 1, boxShadow: isActive ? "inset 0 2px 6px rgba(0,0,0,0.08)" : "none" }),
+        // Active-border color is keyed off bg so each summary card highlights
+        // in its own accent. #fef2f2 = Overdue (red, urgency), #DBEAFE = Due
+        // Today (medium blue), #EFF6FB = This Week (light blue) — last two
+        // pulled from the brand priority palette.
+        summaryCard: (bg, isActive, isDimmed) => ({ flex: 1, background: bg, borderRadius: "12px", padding: "10px 12px", textAlign: "center", cursor: "pointer", transition: "all 0.15s ease", userSelect: "none", border: isActive ? "2px solid" : "2px solid transparent", borderColor: isActive ? (bg === "#fef2f2" ? "#ef4444" : bg === "#DBEAFE" ? "#2B5F8A" : "#4A8DB8") : "transparent", transform: isActive ? "scale(0.96)" : "scale(1)", opacity: isDimmed ? 0.45 : 1, boxShadow: isActive ? "inset 0 2px 6px rgba(0,0,0,0.08)" : "none" }),
         summaryCount: (color) => ({ fontSize: "22px", fontWeight: "700", color, lineHeight: "1.2" }),
         summaryLabel: { fontSize: "11px", color: "#64748b", fontWeight: "500", marginTop: "2px" },
         list: { flex: 1, overflowY: "auto", padding: "8px 16px", paddingBottom: "140px" },
@@ -1030,6 +1089,44 @@
       };
 
       const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+      /* ── Auto-generated metadata indicator ──
+         Tiny secondary-weight chip that signals "this value was filled in by
+         the system, not the user." Used next to auto-set due dates and
+         priority badges. Tapping shows a toast hint and stops propagation so
+         it doesn't expand/collapse the card or open the date picker behind
+         it. The visual: subtle blue tint matching the brand palette,
+         lightning-bolt glyph + "AUTO" label so screen readers still get the
+         meaning. */
+      const AutoMark = ({ size = "sm", style }) => (
+        <span
+          onClick={(e) => { e.stopPropagation(); showToast("Auto-generated — tap edit to override with manual values"); }}
+          title="Auto-generated — tap edit to override with manual values"
+          aria-label="Auto-generated"
+          role="button"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "1px",
+            padding: size === "sm" ? "0 4px" : "1px 6px",
+            marginLeft: "5px",
+            borderRadius: "4px",
+            background: "rgba(124,180,212,0.18)",
+            color: "#2B5F8A",
+            fontSize: size === "sm" ? "8.5px" : "9.5px",
+            fontWeight: "700",
+            letterSpacing: "0.4px",
+            lineHeight: 1.4,
+            cursor: "pointer",
+            verticalAlign: "middle",
+            userSelect: "none",
+            ...style,
+          }}
+        >
+          <span style={{ fontSize: "0.95em", lineHeight: 1 }} aria-hidden="true">⚡</span>
+          AUTO
+        </span>
+      );
 
       /* ── Task Card ── */
       const TaskCard = ({ task }) => {
@@ -1260,7 +1357,17 @@
                 {task.complete ? (
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f0fdf4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#22c55e" }}><CheckIcon /></div>
                 ) : (
-                  <div style={S.scoreBadge(score)}>{TIER_LABEL_SHORT[bandFromScore(score)]}</div>
+                  <div style={{ position: "relative", flexShrink: 0 }}>
+                    <div style={S.scoreBadge(score)}>{TIER_LABEL_SHORT[bandFromScore(score)]}</div>
+                    {task.priorityAuto && !task.complete && (
+                      <span
+                        onClick={(e) => { e.stopPropagation(); showToast("Priority auto-generated — tap edit to override"); }}
+                        title="Priority auto-generated — tap edit to override"
+                        aria-label="Priority auto-generated"
+                        style={{ position: "absolute", top: "-4px", right: "-4px", width: "14px", height: "14px", borderRadius: "50%", background: "#2B5F8A", color: "#fff", fontSize: "9px", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 0 2px #fff", cursor: "pointer", lineHeight: 1, userSelect: "none" }}
+                      >⚡</span>
+                    )}
+                  </div>
                 )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {isExpanded ? (
@@ -1274,7 +1381,14 @@
                   ) : (
                     <div style={S.taskName(task.complete)}>{task.name}</div>
                   )}
-                  {dueText && <div style={S.dueLabel(dueStatus)}>{dueText}</div>}
+                  {dueText && (
+                    <div style={S.dueLabel(dueStatus)}>
+                      {dueText}
+                      {task.dueDateAuto && !task.complete && status !== "snoozed" && (
+                        <AutoMark size="sm" style={{ marginLeft: 6 }} />
+                      )}
+                    </div>
+                  )}
                   {status === "snoozed" && task.postponeUntil && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
                   {status !== "snoozed" && task.postponeUntil && !task.complete && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
                 </div>
@@ -1285,14 +1399,27 @@
                   <EditForm
                     task={task}
                     onTaskChange={(changes) => updateTask(task.id, changes)}
-                    onDone={() => {
-                      setExiting("done");
-                      recordCompletion(task.id);
-                      setTimeout(() => {
-                        updateTask(task.id, { complete: true });
+                    onSave={(markComplete) => {
+                      // Three branches:
+                      //  1. user wants to complete a non-complete task → slide-out + complete
+                      //  2. user wants to reopen a completed task → uncheck the flag, close
+                      //  3. nothing changed re. completion → just close the panel
+                      if (markComplete && !task.complete) {
+                        setExiting("done");
+                        recordCompletion(task.id);
+                        setTimeout(() => {
+                          updateTask(task.id, { complete: true });
+                          setExpandedId(null);
+                          showToast("Marked complete!");
+                        }, 280);
+                      } else if (!markComplete && task.complete) {
+                        updateTask(task.id, { complete: false });
                         setExpandedId(null);
-                        showToast("Done!");
-                      }, 280);
+                        showToast("Task reopened");
+                      } else {
+                        setExpandedId(null);
+                        showToast("Saved");
+                      }
                     }}
                     onTrash={() => {
                       setExiting("trash");
@@ -1374,9 +1501,9 @@
           return { y: yTop, h: Math.max(0, yBot - yTop), color, alpha };
         };
         const bands = [
-          bandFill(10,  5.5, "#fee2e2", 0.55), // High
-          bandFill(5.5, 3.0, "#fef3c7", 0.55), // Medium
-          bandFill(3.0, 1.0, "#e0e7ff", 0.55), // Low
+          bandFill(10,  5.5, "#0F2A4A", 0.32), // High - deep navy, heaviest tint
+          bandFill(5.5, 3.0, "#4A8DB8", 0.24), // Medium
+          bandFill(3.0, 1.0, "#7CB4D4", 0.18), // Low - light blue, faintest
         ];
 
         // Today marker (within the window)
@@ -1545,9 +1672,9 @@
                 <rect key={i} x={VB.padL} y={b.y} width={plotW} height={b.h} fill={b.color} opacity={b.alpha} />
               ))}
               {/* Y-axis labels (band names, sentence-cased on the left) */}
-              <text x={4}  y={py(7.75) + 4} fontSize="10" fill="#b91c1c" fontWeight="700" fontFamily="Inter, sans-serif">High</text>
-              <text x={4}  y={py(4.25) + 4} fontSize="10" fill="#92400e" fontWeight="700" fontFamily="Inter, sans-serif">Med</text>
-              <text x={4}  y={py(2.0)  + 4} fontSize="10" fill="#3730a3" fontWeight="700" fontFamily="Inter, sans-serif">Low</text>
+              <text x={4}  y={py(7.75) + 4} fontSize="10" fill="#1E3A5F" fontWeight="700" fontFamily="Inter, sans-serif">High</text>
+              <text x={4}  y={py(4.25) + 4} fontSize="10" fill="#2B5F8A" fontWeight="700" fontFamily="Inter, sans-serif">Med</text>
+              <text x={4}  y={py(2.0)  + 4} fontSize="10" fill="#4A8DB8" fontWeight="700" fontFamily="Inter, sans-serif">Low</text>
               {/* Plot frame */}
               <line x1={VB.padL} y1={VB.padT} x2={VB.padL} y2={VB.padT + plotH} stroke="#cbd5e1" strokeWidth="0.5" />
               <line x1={VB.padL} y1={VB.padT + plotH} x2={VB.padL + plotW} y2={VB.padT + plotH} stroke="#cbd5e1" strokeWidth="0.5" />
@@ -1593,7 +1720,7 @@
       }
 
       /* ── Edit Form ── */
-      function EditForm({ task, onTaskChange, onDone, onTrash }) {
+      function EditForm({ task, onTaskChange, onSave, onTrash }) {
         // Local state mirrors task fields so we can render input changes
         // smoothly. onTaskChange is called when a value should be persisted:
         // - immediately on date pickers (one event per pick)
@@ -1603,12 +1730,24 @@
         const [sp, setSp]               = useState(task.startPriority);
         const [pp, setPp]               = useState(task.peakPriority);
         const [postpone, setPostpone]   = useState(task.postponeUntil ? toISO(task.postponeUntil) : "");
+        // Local toggle for the "Mark as Complete" checkbox at the top of the
+        // edit form. Initialized from the task's current state so editing a
+        // completed task shows the checkbox already on. Doesn't hit the
+        // server until the user clicks Save Changes — this is the one piece
+        // of edit state that intentionally is NOT auto-saved, so saving
+        // edits never marks a task complete by accident.
+        const [markComplete, setMarkComplete] = useState(!!task.complete);
 
         const fieldStyle = { width: "100%", padding: "10px 12px", borderRadius: "10px", border: "1px solid #e2e8f0", fontSize: "14px", fontFamily: "Inter, sans-serif", outline: "none", marginTop: "4px" };
         const labelStyle = { fontSize: "12px", color: "#64748b", fontWeight: "600", display: "block", marginTop: "12px" };
 
+        // Editing the start date doesn't flip the dueDateAuto flag — the
+        // "auto" indicator is specifically about the *due* date — so we only
+        // clear `dueDateAuto` from handleDueDate / handleGraphCommit (when
+        // the due-date dot moved). Priority edits in the graph clear
+        // `priorityAuto`.
         const handleStartDate = (next) => { setStartDate(next); onTaskChange({ startDate: next }); };
-        const handleDueDate   = (next) => { setDueDate(next);   onTaskChange({ dueDate: next });   };
+        const handleDueDate   = (next) => { setDueDate(next);   onTaskChange({ dueDate: next, dueDateAuto: false }); };
         const handlePostpone  = (next) => { setPostpone(next);  onTaskChange({ postponeUntil: next || null }); };
         const handleGraphChange = (next) => {
           if (next.startPriority !== undefined) setSp(next.startPriority);
@@ -1617,11 +1756,71 @@
           if (next.dueDate)                      setDueDate(next.dueDate);
         };
         const handleGraphCommit = () => {
-          onTaskChange({ startDate, dueDate, startPriority: sp, peakPriority: pp });
+          // Compare against the task's saved values so we only flip an
+          // auto flag when the user actually moved that thing in this drag.
+          const dueChanged   = dueDate !== toISO(task.dueDate);
+          const prioChanged  = sp !== task.startPriority || pp !== task.peakPriority;
+          const patch = { startDate, dueDate, startPriority: sp, peakPriority: pp };
+          if (dueChanged   && task.dueDateAuto)   patch.dueDateAuto = false;
+          if (prioChanged  && task.priorityAuto)  patch.priorityAuto = false;
+          onTaskChange(patch);
         };
 
         return (
           <div style={{ padding: "8px 0" }} onClick={(e) => e.stopPropagation()}>
+            {/* Mark-as-Complete toggle — sits at the very top in its own
+                highlighted (green) container so it reads as a status decision
+                separate from the edit fields below. Tapping anywhere on the
+                row toggles the checkbox state. The actual completion is
+                committed when the user taps Save Changes; this checkbox does
+                NOT auto-save, by design — auto-saving completion was the
+                exact ambiguity this UI resolves. */}
+            <div
+              role="checkbox"
+              tabIndex={0}
+              aria-checked={markComplete}
+              onClick={() => setMarkComplete(v => !v)}
+              onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); setMarkComplete(v => !v); } }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+                padding: "12px 14px",
+                borderRadius: "12px",
+                marginTop: "4px",
+                marginBottom: "4px",
+                cursor: "pointer",
+                background: markComplete ? "#dcfce7" : "#f0fdf4",
+                border: "1.5px solid " + (markComplete ? "#22c55e" : "#bbf7d0"),
+                userSelect: "none",
+                fontFamily: "Inter, sans-serif",
+              }}
+            >
+              <div style={{
+                width: "22px",
+                height: "22px",
+                borderRadius: "6px",
+                background: markComplete ? "#22c55e" : "#fff",
+                border: "2px solid " + (markComplete ? "#22c55e" : "#86efac"),
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#fff",
+                flexShrink: 0,
+                transition: "background 0.15s ease, border-color 0.15s ease",
+              }}>
+                {markComplete && <CheckIcon />}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: "14px", fontWeight: "700", color: "#166534", lineHeight: 1.2 }}>Mark as Complete</div>
+                <div style={{ fontSize: "11px", color: "#15803d", marginTop: "2px", lineHeight: 1.3 }}>
+                  {markComplete
+                    ? (task.complete ? "Already completed — uncheck to reopen this task." : "This task will be marked done when you tap Save Changes.")
+                    : "Saving edits won't mark the task complete — check this if you want it done."}
+                </div>
+              </div>
+            </div>
+
             {/* Native <input type="date"> is rendered by the browser/OS in a
                 fixed locale format (e.g. "Apr 20, 2026" on iOS). To show our
                 "Monday, Apr 20" format, overlay our own text on top of a
@@ -1637,7 +1836,10 @@
                 </div>
               </div>
               <div>
-                <label style={labelStyle}>Due Date</label>
+                <label style={labelStyle}>
+                  Due Date
+                  {task.dueDateAuto && <AutoMark />}
+                </label>
                 <div style={{ position: "relative", marginTop: "4px" }}>
                   <div style={{ ...fieldStyle, marginTop: 0, background: "#fff", color: dueDate ? "#1e293b" : "#94a3b8" }}>
                     {dueDate ? fmtFull(dueDate) : "Pick a date"}
@@ -1646,7 +1848,10 @@
                 </div>
               </div>
             </div>
-            <label style={labelStyle}>Priority — drag dots to adjust</label>
+            <label style={labelStyle}>
+              Priority — drag dots to adjust
+              {task.priorityAuto && <AutoMark />}
+            </label>
             <div style={{ marginTop: "6px" }}>
               <PriorityGraph
                 startDate={startDate}
@@ -1661,10 +1866,10 @@
             <input type="date" style={fieldStyle} value={postpone} onChange={e => handlePostpone(e.target.value)} />
 
             <button
-              onClick={onDone}
-              style={{ width: "100%", marginTop: "20px", padding: "16px", borderRadius: "12px", border: "none", background: "#22c55e", color: "#fff", fontSize: "17px", fontWeight: "700", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", boxShadow: "0 2px 8px rgba(34,197,94,0.35)", fontFamily: "Inter, sans-serif" }}
+              onClick={() => onSave(markComplete)}
+              style={{ width: "100%", marginTop: "20px", padding: "16px", borderRadius: "12px", border: "none", background: "#3b82f6", color: "#fff", fontSize: "17px", fontWeight: "700", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", boxShadow: "0 2px 8px rgba(59,130,246,0.35)", fontFamily: "Inter, sans-serif" }}
             >
-              <CheckIcon /> Done
+              Save Changes
             </button>
             <button
               onClick={onTrash}
@@ -1947,11 +2152,18 @@
             <div style={S.headerTop}>
               <div>
                 <div style={S.title}>
-                  <svg style={S.titleIcon} viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                    <rect width="1024" height="1024" rx="224" ry="224" fill="#3b82f6"/>
-                    <rect x="222" y="280" width="580" height="130" rx="65" ry="65" fill="#ffffff"/>
-                    <rect x="222" y="447" width="440" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.78"/>
-                    <rect x="222" y="614" width="300" height="130" rx="65" ry="65" fill="#ffffff" opacity="0.58"/>
+                  {/* Staircase logo — three blue bars with a white stair-step
+                      line tracing the upper-left edges. Transparent
+                      background so the navy header shows through. The
+                      legacy horizontal-bars-on-blue-tile favicon is still
+                      shipped under /icons/ for PWA install contexts and
+                      isn't touched here. */}
+                  <svg style={S.titleIcon} viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <rect x="13" y="62" width="26" height="50" rx="4" fill="#7CB4D4"/>
+                    <rect x="47" y="38" width="26" height="74" rx="4" fill="#4A8DB8"/>
+                    <rect x="81" y="14" width="26" height="98" rx="4" fill="#2B5F8A"/>
+                    <path d="M 13 110 L 13 62 L 47 62 L 47 38 L 81 38 L 81 14 L 107 14"
+                          fill="none" stroke="#ffffff" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
                   <span>ChiefEO<span style={S.titleTm}>&trade;</span></span>
                 </div>
@@ -2012,22 +2224,22 @@
                 <div style={S.summaryLabel}>Overdue</div>
                 {summaryFilter === "overdue" && <div style={{ fontSize: "9px", color: "#ef4444", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
               </div>
-              <div style={S.summaryCard("#fffbeb", summaryFilter === "dueToday", summaryFilter && summaryFilter !== "dueToday")} onClick={() => { toggleFilter("dueToday"); if (tab !== "active") { setTab("active"); setExpandedId(null); } }}>
-                <div style={S.summaryCount("#f59e0b")}>{dueTodayCount}</div>
+              <div style={S.summaryCard("#DBEAFE", summaryFilter === "dueToday", summaryFilter && summaryFilter !== "dueToday")} onClick={() => { toggleFilter("dueToday"); if (tab !== "active") { setTab("active"); setExpandedId(null); } }}>
+                <div style={S.summaryCount("#2B5F8A")}>{dueTodayCount}</div>
                 <div style={S.summaryLabel}>Due Today</div>
-                {summaryFilter === "dueToday" && <div style={{ fontSize: "9px", color: "#f59e0b", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
+                {summaryFilter === "dueToday" && <div style={{ fontSize: "9px", color: "#2B5F8A", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
               </div>
-              <div style={S.summaryCard("#eff6ff", summaryFilter === "thisWeek", summaryFilter && summaryFilter !== "thisWeek")} onClick={() => { toggleFilter("thisWeek"); if (tab !== "active") { setTab("active"); setExpandedId(null); } }}>
-                <div style={S.summaryCount("#3b82f6")}>{thisWeekCount}</div>
+              <div style={S.summaryCard("#EFF6FB", summaryFilter === "thisWeek", summaryFilter && summaryFilter !== "thisWeek")} onClick={() => { toggleFilter("thisWeek"); if (tab !== "active") { setTab("active"); setExpandedId(null); } }}>
+                <div style={S.summaryCount("#4A8DB8")}>{thisWeekCount}</div>
                 <div style={S.summaryLabel}>This Week</div>
-                {summaryFilter === "thisWeek" && <div style={{ fontSize: "9px", color: "#3b82f6", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
+                {summaryFilter === "thisWeek" && <div style={{ fontSize: "9px", color: "#4A8DB8", fontWeight: "700", marginTop: "2px", letterSpacing: "0.3px" }}>FILTERED</div>}
               </div>
             </div>
           </div>
 
           {summaryFilter && tab === "active" && (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 20px 0 20px", background: "#f8fafc" }}>
-              <div style={{ fontSize: "13px", fontWeight: "600", color: "#475569" }}>Showing: <span style={{ color: summaryFilter === "overdue" ? "#ef4444" : summaryFilter === "dueToday" ? "#f59e0b" : "#3b82f6" }}>{filterLabel} ({filterCount})</span></div>
+              <div style={{ fontSize: "13px", fontWeight: "600", color: "#475569" }}>Showing: <span style={{ color: summaryFilter === "overdue" ? "#ef4444" : summaryFilter === "dueToday" ? "#2B5F8A" : "#4A8DB8" }}>{filterLabel} ({filterCount})</span></div>
               <button onClick={() => setSummaryFilter(null)} style={{ background: "#e2e8f0", border: "none", borderRadius: "8px", padding: "4px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", cursor: "pointer", fontFamily: "Inter, sans-serif", display: "flex", alignItems: "center", gap: "4px" }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>Clear
               </button>

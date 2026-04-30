@@ -17,6 +17,7 @@ the schema is small enough that a per-PR checklist works).
 | #   | File                                       | Purpose                                                                |
 | --- | ------------------------------------------ | ---------------------------------------------------------------------- |
 | 001 | `001-completed-at-trashed-at.sql`          | `tasks.completed_at` + `tasks.trashed_at` (TIMESTAMPTZ) for cleanup/cron |
+| 002 | `002-due-date-priority-auto-flags.sql`     | `tasks.due_date_auto` + `tasks.priority_auto` (BOOLEAN) for the auto/manual indicator |
 
 ## Conventions
 
