@@ -166,6 +166,10 @@
         trashed:       row.trashed,
         completedAt:   row.completed_at || null,
         trashedAt:     row.trashed_at || null,
+        // Auto-vs-manual provenance for the small "auto" indicator beside
+        // due-date / priority values. NULL/missing → false (legacy rows).
+        dueDateAuto:   row.due_date_auto === true,
+        priorityAuto:  row.priority_auto === true,
       };
     }
 
@@ -182,6 +186,8 @@
         trashed:        task.trashed ?? false,
         completed_at:   task.completedAt || null,
         trashed_at:     task.trashedAt || null,
+        due_date_auto:  task.dueDateAuto ?? false,
+        priority_auto:  task.priorityAuto ?? false,
       };
     }
 
@@ -221,6 +227,8 @@
       if (changes.trashed       !== undefined) dbChanges.trashed        = changes.trashed;
       if (changes.completedAt   !== undefined) dbChanges.completed_at   = changes.completedAt;
       if (changes.trashedAt     !== undefined) dbChanges.trashed_at     = changes.trashedAt;
+      if (changes.dueDateAuto   !== undefined) dbChanges.due_date_auto  = changes.dueDateAuto;
+      if (changes.priorityAuto  !== undefined) dbChanges.priority_auto  = changes.priorityAuto;
       const { error } = await sb
         .from("tasks")
         .update(dbChanges)
@@ -830,6 +838,12 @@
             postponeUntil: null,
             complete: false,
             trashed: false,
+            // Manual Quick-Add: user picked the tier and (optionally) the
+            // due date. If they typed a date, it's manual. If they took
+            // the tier-default, it's still tier-driven by their pick — the
+            // user owns it either way, so flag both as user-set.
+            dueDateAuto: false,
+            priorityAuto: false,
           };
           const inserted = await dbInsertTask(newTask, user.id);
           setTasks(prev => [inserted, ...prev]);
@@ -1030,6 +1044,44 @@
       };
 
       const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+      /* ── Auto-generated metadata indicator ──
+         Tiny secondary-weight chip that signals "this value was filled in by
+         the system, not the user." Used next to auto-set due dates and
+         priority badges. Tapping shows a toast hint and stops propagation so
+         it doesn't expand/collapse the card or open the date picker behind
+         it. The visual: subtle blue tint matching the brand palette,
+         lightning-bolt glyph + "AUTO" label so screen readers still get the
+         meaning. */
+      const AutoMark = ({ size = "sm", style }) => (
+        <span
+          onClick={(e) => { e.stopPropagation(); showToast("Auto-generated — tap edit to override with manual values"); }}
+          title="Auto-generated — tap edit to override with manual values"
+          aria-label="Auto-generated"
+          role="button"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "1px",
+            padding: size === "sm" ? "0 4px" : "1px 6px",
+            marginLeft: "5px",
+            borderRadius: "4px",
+            background: "rgba(124,180,212,0.18)",
+            color: "#2B5F8A",
+            fontSize: size === "sm" ? "8.5px" : "9.5px",
+            fontWeight: "700",
+            letterSpacing: "0.4px",
+            lineHeight: 1.4,
+            cursor: "pointer",
+            verticalAlign: "middle",
+            userSelect: "none",
+            ...style,
+          }}
+        >
+          <span style={{ fontSize: "0.95em", lineHeight: 1 }} aria-hidden="true">⚡</span>
+          AUTO
+        </span>
+      );
 
       /* ── Task Card ── */
       const TaskCard = ({ task }) => {
@@ -1260,7 +1312,17 @@
                 {task.complete ? (
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f0fdf4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#22c55e" }}><CheckIcon /></div>
                 ) : (
-                  <div style={S.scoreBadge(score)}>{TIER_LABEL_SHORT[bandFromScore(score)]}</div>
+                  <div style={{ position: "relative", flexShrink: 0 }}>
+                    <div style={S.scoreBadge(score)}>{TIER_LABEL_SHORT[bandFromScore(score)]}</div>
+                    {task.priorityAuto && !task.complete && (
+                      <span
+                        onClick={(e) => { e.stopPropagation(); showToast("Priority auto-generated — tap edit to override"); }}
+                        title="Priority auto-generated — tap edit to override"
+                        aria-label="Priority auto-generated"
+                        style={{ position: "absolute", top: "-4px", right: "-4px", width: "14px", height: "14px", borderRadius: "50%", background: "#2B5F8A", color: "#fff", fontSize: "9px", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 0 2px #fff", cursor: "pointer", lineHeight: 1, userSelect: "none" }}
+                      >⚡</span>
+                    )}
+                  </div>
                 )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {isExpanded ? (
@@ -1274,7 +1336,14 @@
                   ) : (
                     <div style={S.taskName(task.complete)}>{task.name}</div>
                   )}
-                  {dueText && <div style={S.dueLabel(dueStatus)}>{dueText}</div>}
+                  {dueText && (
+                    <div style={S.dueLabel(dueStatus)}>
+                      {dueText}
+                      {task.dueDateAuto && !task.complete && status !== "snoozed" && (
+                        <AutoMark size="sm" style={{ marginLeft: 6 }} />
+                      )}
+                    </div>
+                  )}
                   {status === "snoozed" && task.postponeUntil && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
                   {status !== "snoozed" && task.postponeUntil && !task.complete && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
                 </div>
@@ -1607,8 +1676,13 @@
         const fieldStyle = { width: "100%", padding: "10px 12px", borderRadius: "10px", border: "1px solid #e2e8f0", fontSize: "14px", fontFamily: "Inter, sans-serif", outline: "none", marginTop: "4px" };
         const labelStyle = { fontSize: "12px", color: "#64748b", fontWeight: "600", display: "block", marginTop: "12px" };
 
+        // Editing the start date doesn't flip the dueDateAuto flag — the
+        // "auto" indicator is specifically about the *due* date — so we only
+        // clear `dueDateAuto` from handleDueDate / handleGraphCommit (when
+        // the due-date dot moved). Priority edits in the graph clear
+        // `priorityAuto`.
         const handleStartDate = (next) => { setStartDate(next); onTaskChange({ startDate: next }); };
-        const handleDueDate   = (next) => { setDueDate(next);   onTaskChange({ dueDate: next });   };
+        const handleDueDate   = (next) => { setDueDate(next);   onTaskChange({ dueDate: next, dueDateAuto: false }); };
         const handlePostpone  = (next) => { setPostpone(next);  onTaskChange({ postponeUntil: next || null }); };
         const handleGraphChange = (next) => {
           if (next.startPriority !== undefined) setSp(next.startPriority);
@@ -1617,7 +1691,14 @@
           if (next.dueDate)                      setDueDate(next.dueDate);
         };
         const handleGraphCommit = () => {
-          onTaskChange({ startDate, dueDate, startPriority: sp, peakPriority: pp });
+          // Compare against the task's saved values so we only flip an
+          // auto flag when the user actually moved that thing in this drag.
+          const dueChanged   = dueDate !== toISO(task.dueDate);
+          const prioChanged  = sp !== task.startPriority || pp !== task.peakPriority;
+          const patch = { startDate, dueDate, startPriority: sp, peakPriority: pp };
+          if (dueChanged   && task.dueDateAuto)   patch.dueDateAuto = false;
+          if (prioChanged  && task.priorityAuto)  patch.priorityAuto = false;
+          onTaskChange(patch);
         };
 
         return (
@@ -1637,7 +1718,10 @@
                 </div>
               </div>
               <div>
-                <label style={labelStyle}>Due Date</label>
+                <label style={labelStyle}>
+                  Due Date
+                  {task.dueDateAuto && <AutoMark />}
+                </label>
                 <div style={{ position: "relative", marginTop: "4px" }}>
                   <div style={{ ...fieldStyle, marginTop: 0, background: "#fff", color: dueDate ? "#1e293b" : "#94a3b8" }}>
                     {dueDate ? fmtFull(dueDate) : "Pick a date"}
@@ -1646,7 +1730,10 @@
                 </div>
               </div>
             </div>
-            <label style={labelStyle}>Priority — drag dots to adjust</label>
+            <label style={labelStyle}>
+              Priority — drag dots to adjust
+              {task.priorityAuto && <AutoMark />}
+            </label>
             <div style={{ marginTop: "6px" }}>
               <PriorityGraph
                 startDate={startDate}
