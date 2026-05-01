@@ -61,6 +61,41 @@ const DEFAULT_KEYWORDS = [
   { id: "k35", word: "newsletter",                tier: "Suppress", default: true, enabled: true },
 ];
 
+// ── Default task_type keyword library ──────────────────────────────
+// Five operational types. `action` is the implicit fallback when no other
+// type's keywords match. Detection is opt-in (Advanced Mode in the client) but
+// the column is always populated so existing rows stay valid.
+//
+// Match is case-insensitive, whole-string-contains, evaluated in priority
+// order top-to-bottom. First match wins. The client may override the keyword
+// list, the per-type enable flag, and the evaluation order via
+// priorities.task_type_keywords (see the JSON shape below).
+const DEFAULT_TASK_TYPE_EVALUATION_ORDER = ["quick_fu", "office_only", "delay", "track"];
+
+const DEFAULT_TASK_TYPE_KEYWORDS = {
+  quick_fu:    [
+    { id: "tt-qfu-1", phrase: "Quick FU", default: true, enabled: true },
+    { id: "tt-qfu-2", phrase: "QFU",      default: true, enabled: true },
+  ],
+  office_only: [
+    { id: "tt-bo-1", phrase: "BO",        default: true, enabled: true },
+    { id: "tt-bo-2", phrase: "Office",    default: true, enabled: true },
+    { id: "tt-bo-3", phrase: "In office", default: true, enabled: true },
+  ],
+  delay:       [
+    { id: "tt-dly-1", phrase: "Hold",  default: true, enabled: true },
+    { id: "tt-dly-2", phrase: "Later", default: true, enabled: true },
+    { id: "tt-dly-3", phrase: "Delay", default: true, enabled: true },
+  ],
+  track:       [
+    { id: "tt-trk-1", phrase: "Track",    default: true, enabled: true },
+    { id: "tt-trk-2", phrase: "FYI",      default: true, enabled: true },
+    { id: "tt-trk-3", phrase: "Watching", default: true, enabled: true },
+  ],
+};
+
+const DEFAULT_TASK_TYPE_ENABLED = { quick_fu: true, office_only: true, delay: true, track: true };
+
 // ── Default tier→priority bands ────────────────────────────────────
 // Score thresholds match bandFromScore() on the client (>=5.5 High,
 // >=3.0 Medium, >=1.0 Low, else Suppress).
@@ -107,6 +142,30 @@ function extractKeywords(text, keywordList) {
     }
   }
   return { tiers: hits, words };
+}
+
+// Walk the configured task_type_keywords in evaluation order, skipping types
+// the user has disabled (typeEnabled[type] === false). First match wins. If
+// nothing matches (or no config exists), returns "action" — the always-on
+// default that requires no opt-in. Subject-line scan only — body text is not
+// inspected to keep matches predictable for the user.
+function detectTaskType(name, taskTypeConfig) {
+  const cfg = (taskTypeConfig && typeof taskTypeConfig === "object") ? taskTypeConfig : {};
+  const order = Array.isArray(cfg.evaluationOrder) && cfg.evaluationOrder.length > 0
+    ? cfg.evaluationOrder
+    : DEFAULT_TASK_TYPE_EVALUATION_ORDER;
+  const enabled = (cfg.typeEnabled && typeof cfg.typeEnabled === "object") ? cfg.typeEnabled : DEFAULT_TASK_TYPE_ENABLED;
+  const lower = String(name || "").toLowerCase();
+  for (const type of order) {
+    if (enabled[type] === false) continue;
+    const list = Array.isArray(cfg[type]) && cfg[type].length > 0 ? cfg[type] : (DEFAULT_TASK_TYPE_KEYWORDS[type] || []);
+    for (const kw of list) {
+      if (kw.enabled === false) continue;
+      const phrase = String(kw.phrase || "").toLowerCase();
+      if (phrase && lower.includes(phrase)) return type;
+    }
+  }
+  return "action";
 }
 
 function lookupSenderTier(email, peopleList) {
@@ -233,12 +292,17 @@ function scoreTask({ name, senderEmail, receivedDateISO, explicitDueDate, todayI
     }
   }
 
+  // task_type detection — independent of priority scoring. Honors the user's
+  // task_type_keywords config (with per-type enable flags) when set.
+  const taskType = detectTaskType(name, config && config.task_type_keywords);
+
   return {
     tier,
     startPriority: band.start,
     peakPriority:  band.peak,
     dueDate,
     matchedKeywords: matchedWords,
+    task_type: taskType,
   };
 }
 
