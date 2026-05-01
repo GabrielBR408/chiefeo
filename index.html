@@ -165,6 +165,8 @@
         // due-date / priority values. NULL/missing → false (legacy rows).
         dueDateAuto:   row.due_date_auto === true,
         priorityAuto:  row.priority_auto === true,
+        // Operational category. Always populated by the column DEFAULT 'action'.
+        taskType:      row.task_type || "action",
       };
     }
 
@@ -183,6 +185,7 @@
         trashed_at:     task.trashedAt || null,
         due_date_auto:  task.dueDateAuto ?? false,
         priority_auto:  task.priorityAuto ?? false,
+        task_type:      task.taskType || "action",
       };
     }
 
@@ -224,6 +227,7 @@
       if (changes.trashedAt     !== undefined) dbChanges.trashed_at     = changes.trashedAt;
       if (changes.dueDateAuto   !== undefined) dbChanges.due_date_auto  = changes.dueDateAuto;
       if (changes.priorityAuto  !== undefined) dbChanges.priority_auto  = changes.priorityAuto;
+      if (changes.taskType      !== undefined) dbChanges.task_type      = changes.taskType;
       const { error } = await sb
         .from("tasks")
         .update(dbChanges)
@@ -251,12 +255,33 @@
       if (error) throw error;
     }
 
+    /* ══════════════ Task Types (Advanced Mode) ══════════════
+       Five operational categories so a power user can filter "Quick FU" pings
+       out from real "Action" work, hide Office Only items on a WFH day, etc.
+       `action` is the implicit default — assigned to anything that doesn't
+       match a more specific keyword. The other four are opt-in via Settings →
+       Advanced Mode. Detection runs server-side in /api/score-task using the
+       user's task_type_keywords config (see DEFAULT_PRIORITIES below). */
+    const TASK_TYPES       = ["action", "quick_fu", "track", "office_only", "delay"];
+    const TASK_TYPE_LABELS = { action: "Action", quick_fu: "Quick FU", track: "Track", office_only: "Office Only", delay: "Delay" };
+    const TASK_TYPE_COLORS = {
+      action:      { bg: "#f1f5f9", fg: "#64748b", border: "#e2e8f0" },
+      quick_fu:    { bg: "#dbeafe", fg: "#1d4ed8", border: "#93c5fd" },
+      track:       { bg: "#ede9fe", fg: "#6d28d9", border: "#c4b5fd" },
+      office_only: { bg: "#fef3c7", fg: "#92400e", border: "#fcd34d" },
+      delay:       { bg: "#fee2e2", fg: "#991b1b", border: "#fca5a5" },
+    };
+
     /* ══════════════ Default priorities (no LPC-specific data) ══════════════
        The default keyword library lives server-side in /api/score-task — it's
        proprietary and we don't ship it in the page source. User-added keywords
        still live in this config (in the user's Supabase priorities row) and
        render in the Priorities UI; brand-new users see an empty list here and
-       the server's defaults apply silently during scoring. */
+       the server's defaults apply silently during scoring.
+
+       advancedMode and task_type_keywords are part of the same config blob.
+       Default OFF so existing users see no UI change. Server-side detection
+       reads task_type_keywords with the same shape (see /api/score-task). */
     const DEFAULT_PRIORITIES = {
       schemaVersion: 1,
       lastModifiedAt: null,
@@ -264,7 +289,52 @@
       keywords: [],
       dueDateDefaults: { High: 1, Medium: 3, Low: 7, Suppress: 14 },
       manualAddDefault: { dueBucket: "+7" },
+      advancedMode: false,
+      task_type_keywords: {
+        evaluationOrder: ["quick_fu", "office_only", "delay", "track"],
+        typeEnabled: { quick_fu: true, office_only: true, delay: true, track: true },
+        quick_fu: [
+          { id: "tt-qfu-1", phrase: "Quick FU", default: true, enabled: true },
+          { id: "tt-qfu-2", phrase: "QFU",      default: true, enabled: true },
+        ],
+        office_only: [
+          { id: "tt-bo-1", phrase: "BO",        default: true, enabled: true },
+          { id: "tt-bo-2", phrase: "Office",    default: true, enabled: true },
+          { id: "tt-bo-3", phrase: "In office", default: true, enabled: true },
+        ],
+        delay: [
+          { id: "tt-dly-1", phrase: "Hold",  default: true, enabled: true },
+          { id: "tt-dly-2", phrase: "Later", default: true, enabled: true },
+          { id: "tt-dly-3", phrase: "Delay", default: true, enabled: true },
+        ],
+        track: [
+          { id: "tt-trk-1", phrase: "Track",    default: true, enabled: true },
+          { id: "tt-trk-2", phrase: "FYI",      default: true, enabled: true },
+          { id: "tt-trk-3", phrase: "Watching", default: true, enabled: true },
+        ],
+      },
     };
+
+    /* Hydrate a config loaded from Supabase that may predate Task Types so the
+       new optional fields exist with sensible defaults. Idempotent — safe to
+       call on already-hydrated configs. */
+    function hydratePriorities(cfg) {
+      if (!cfg || typeof cfg !== "object") return DEFAULT_PRIORITIES;
+      const out = { ...cfg };
+      if (out.advancedMode === undefined) out.advancedMode = false;
+      if (!out.task_type_keywords) {
+        out.task_type_keywords = DEFAULT_PRIORITIES.task_type_keywords;
+      } else {
+        const tk = out.task_type_keywords;
+        if (!tk.evaluationOrder) tk.evaluationOrder = DEFAULT_PRIORITIES.task_type_keywords.evaluationOrder;
+        if (!tk.typeEnabled) tk.typeEnabled = { quick_fu: true, office_only: true, delay: true, track: true };
+        ["quick_fu", "office_only", "delay", "track"].forEach(tp => {
+          if (!Array.isArray(tk[tp])) tk[tp] = DEFAULT_PRIORITIES.task_type_keywords[tp];
+          if (tk.typeEnabled[tp] === undefined) tk.typeEnabled[tp] = true;
+        });
+      }
+      return out;
+    }
 
     /* ── Date Helpers ── */
     function parseLocalDate(s) {
@@ -463,6 +533,62 @@
     }
     function PlusSmall() {
       return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>);
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       Task Type keyword group — used in PrioritiesView's Advanced Mode card.
+       One block per type (Quick FU, Office Only, Delay, Track) with:
+       - per-type enable/disable switch (omit whole type from UI surfaces)
+       - pill toggle (tap text to enable/disable a single keyword)
+       - pill delete (× removes a default OR custom keyword)
+       - inline "+ keyword" input + Add button
+    ══════════════════════════════════════════════════════════════ */
+    function TtKwGroup({ type, idx, colors, typeOn, list, onToggleType, onTogglePill, onDeletePill, onAdd }) {
+      const [draft, setDraft] = useState("");
+      const submit = () => { if (draft.trim()) { onAdd(draft); setDraft(""); } };
+      return (
+        <div style={{ marginBottom: "14px", opacity: typeOn ? 1 : 0.45 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ background: "#0f172a", color: "#fff", width: "18px", height: "18px", borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: "700" }}>{idx + 1}</span>
+              <span style={{ display: "inline-block", fontSize: "10px", fontWeight: "700", padding: "3px 7px", borderRadius: "4px", textTransform: "uppercase", letterSpacing: "0.04em", background: colors.bg, color: colors.fg }}>{TASK_TYPE_LABELS[type]}</span>
+              {!typeOn && <span style={{ fontSize: "10px", color: "#94a3b8", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.05em" }}>Omitted</span>}
+            </div>
+            <div onClick={onToggleType}
+                 title={typeOn ? "Omit this type" : "Enable this type"}
+                 style={{ position: "relative", width: "36px", height: "20px", borderRadius: "999px", background: typeOn ? "#3b82f6" : "#cbd5e1", cursor: "pointer", flexShrink: 0, transition: "background 0.18s" }}>
+              <div style={{ position: "absolute", top: "2px", left: "2px", width: "16px", height: "16px", background: "#fff", borderRadius: "50%", boxShadow: "0 1px 2px rgba(0,0,0,0.2)", transform: typeOn ? "translateX(16px)" : "translateX(0)", transition: "transform 0.18s" }}/>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+            {list.map(kw => {
+              const on = kw.enabled !== false && typeOn;
+              return (
+                <div key={kw.id}
+                     style={{ display: "inline-flex", alignItems: "center", gap: "5px", padding: "5px 9px", borderRadius: "14px", background: on ? colors.bg : "#f1f5f9", border: "1px solid " + (on ? colors.border : "#e2e8f0"), color: on ? colors.fg : "#94a3b8", fontSize: "11px", fontWeight: on ? "600" : "500", textDecoration: on ? "none" : "line-through" }}>
+                  <span onClick={() => { if (typeOn) onTogglePill(kw.id); }} style={{ cursor: typeOn ? "pointer" : "default" }}>{kw.phrase}</span>
+                  <span onClick={() => onDeletePill(kw.id)} style={{ cursor: "pointer", opacity: 0.6, fontWeight: "700" }} title="Delete">×</span>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: "8px", display: "flex", gap: "6px", alignItems: "center" }}>
+            <input
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); submit(); } }}
+              placeholder={`Add a keyword for ${TASK_TYPE_LABELS[type]}…`}
+              disabled={!typeOn}
+              style={{ flex: 1, padding: "7px 10px", borderRadius: "8px", border: "1px solid #e2e8f0", fontSize: "12px", outline: "none", background: typeOn ? "#fff" : "#f8fafc", fontFamily: "Inter, sans-serif", color: "#1e293b" }}
+            />
+            <button
+              onClick={submit}
+              disabled={!typeOn || !draft.trim()}
+              style={{ background: typeOn && draft.trim() ? "#3b82f6" : "#cbd5e1", color: "#fff", border: "none", borderRadius: "8px", padding: "7px 12px", fontSize: "12px", fontWeight: "600", cursor: typeOn && draft.trim() ? "pointer" : "not-allowed", fontFamily: "Inter, sans-serif" }}
+            >Add</button>
+          </div>
+        </div>
+      );
     }
 
     /* ══════════════════════════════════════════════════════════════
@@ -780,6 +906,27 @@
       const [cleanupConfirm, setCleanupConfirm]   = useState(null);
       const [cleanupBusy, setCleanupBusy]         = useState(false);
 
+      /* ── Task Types — Advanced Mode UI state ─────────────────────────
+         ttFilter: which type chip is selected at the top of the active list.
+         hiddenTypes: types the user has hidden from the main list via the
+         per-chip eye toggle. Persisted to localStorage per account so a
+         "hide Office Only today" choice survives reloads on this device but
+         doesn't sync across devices — matches the daily-decision use case. */
+      const [ttFilter, setTtFilter]   = useState("all");
+      const HIDDEN_KEY = "chiefeo_hidden_types_" + (user?.email || "anon");
+      const [hiddenTypes, setHiddenTypes] = useState(() => {
+        try { const raw = localStorage.getItem(HIDDEN_KEY); return raw ? JSON.parse(raw) : []; } catch (e) { return []; }
+      });
+      useEffect(() => {
+        try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(hiddenTypes)); } catch (e) {}
+      }, [hiddenTypes, HIDDEN_KEY]);
+      const advancedMode = !!(priorities && priorities.advancedMode);
+      const isTypeHidden = (tp) => hiddenTypes.includes(tp);
+      const toggleHiddenType = (tp) => {
+        setHiddenTypes(prev => prev.includes(tp) ? prev.filter(x => x !== tp) : [...prev, tp]);
+      };
+      const clearHiddenTypes = () => setHiddenTypes([]);
+
       const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
 
       // ── Load tasks from Supabase on mount ──────────────────────
@@ -804,7 +951,7 @@
             const config = await dbLoadPriorities(user.id);
             if (config) {
               suppressPrioritiesSaveRef.current = true;
-              setPriorities(config);
+              setPriorities(hydratePriorities(config));
             }
           } catch (e) {
             console.error("Priorities load failed:", e?.message, e?.code);
@@ -885,6 +1032,9 @@
             // user owns it either way, so flag both as user-set.
             dueDateAuto: false,
             priorityAuto: false,
+            // Server-side task_type detection — falls back to 'action' if the
+            // server didn't return one (older deployments) or no rules matched.
+            taskType: scored.task_type || "action",
           };
           const inserted = await dbInsertTask(newTask, user.id);
           setTasks(prev => [inserted, ...prev]);
@@ -980,6 +1130,44 @@
         setPriorities(prev => ({ ...prev, dueDateDefaults: { ...(prev.dueDateDefaults || {}), [tier]: Math.max(0, parseInt(days, 10) || 0) } }));
       };
 
+      /* ── Task Types mutators (act on priorities.task_type_keywords) ── */
+      const toggleAdvancedMode = () => {
+        setPriorities(prev => ({ ...prev, advancedMode: !prev.advancedMode }));
+      };
+      const toggleTaskTypeEnabled = (type) => {
+        setPriorities(prev => {
+          const tk = prev.task_type_keywords || DEFAULT_PRIORITIES.task_type_keywords;
+          const typeEnabled = { ...(tk.typeEnabled || {}) };
+          typeEnabled[type] = !(typeEnabled[type] !== false);
+          return { ...prev, task_type_keywords: { ...tk, typeEnabled } };
+        });
+      };
+      const toggleTaskTypeKeyword = (type, kwId) => {
+        setPriorities(prev => {
+          const tk = prev.task_type_keywords;
+          const list = (tk[type] || []).map(k => k.id === kwId ? { ...k, enabled: !k.enabled } : k);
+          return { ...prev, task_type_keywords: { ...tk, [type]: list } };
+        });
+      };
+      const removeTaskTypeKeyword = (type, kwId) => {
+        setPriorities(prev => {
+          const tk = prev.task_type_keywords;
+          const list = (tk[type] || []).filter(k => k.id !== kwId);
+          return { ...prev, task_type_keywords: { ...tk, [type]: list } };
+        });
+      };
+      const addTaskTypeKeyword = (type, phrase) => {
+        const v = (phrase || "").trim();
+        if (!v) return;
+        setPriorities(prev => {
+          const tk = prev.task_type_keywords;
+          const exists = (tk[type] || []).some(k => k.phrase.toLowerCase() === v.toLowerCase());
+          if (exists) return prev;
+          const list = [ ...(tk[type] || []), { id: "tt-" + type + "-" + Date.now(), phrase: v, default: false, enabled: true } ];
+          return { ...prev, task_type_keywords: { ...tk, [type]: list } };
+        });
+      };
+
       const realToday = todayDate();
       const effectiveToday = useMemo(() => {
         if (!viewDate) return realToday;
@@ -999,11 +1187,25 @@
               receivedDateISO: t.startDate,
               explicitDueDate: t.dueDate,
               todayISO: td,
-            }).then(r => ({ id: t.id, startPriority: r.startPriority, peakPriority: r.peakPriority }))
+            }).then(r => ({
+              id: t.id,
+              startPriority: r.startPriority,
+              peakPriority: r.peakPriority,
+              detectedTaskType: r.task_type || "action",
+              currentTaskType: t.taskType || "action",
+            }))
               .catch(() => null)
           ));
           const byId = new Map(results.filter(Boolean).map(r => [r.id, r]));
-          setTasks(prev => prev.map(t => byId.has(t.id) ? { ...t, ...byId.get(t.id) } : t));
+          setTasks(prev => prev.map(t => {
+            const r = byId.get(t.id);
+            if (!r) return t;
+            const next = { ...t, startPriority: r.startPriority, peakPriority: r.peakPriority };
+            // Only set taskType when it's still the implicit default. Manual
+            // overrides set via the EditForm dropdown are sticky.
+            if (!t.taskType || t.taskType === "action") next.taskType = r.detectedTaskType;
+            return next;
+          }));
           showToast("Re-scored all active tasks");
         } catch (e) {
           showToast("Re-score failed — check connection");
@@ -1032,16 +1234,29 @@
       const thisWeekCount = activeTasks.filter(t => { const dd = parseLocalDate(t.dueDate); dd.setHours(0,0,0,0); const diff = daysBetween(today, dd); return diff >= 0 && diff <= 7; }).length;
 
       const filteredActiveTasks = useMemo(() => {
-        if (!summaryFilter) return activeTasks;
-        return activeTasks.filter(t => {
-          const dd = parseLocalDate(t.dueDate); dd.setHours(0,0,0,0);
-          const diff = daysBetween(today, dd);
-          if (summaryFilter === "overdue")  return t._status === "overdue";
-          if (summaryFilter === "dueToday") return dd.getTime() === today.getTime();
-          if (summaryFilter === "thisWeek") return diff >= 0 && diff <= 7;
-          return true;
-        });
-      }, [activeTasks, summaryFilter, today]);
+        let list = activeTasks;
+        if (summaryFilter) {
+          list = list.filter(t => {
+            const dd = parseLocalDate(t.dueDate); dd.setHours(0,0,0,0);
+            const diff = daysBetween(today, dd);
+            if (summaryFilter === "overdue")  return t._status === "overdue";
+            if (summaryFilter === "dueToday") return dd.getTime() === today.getTime();
+            if (summaryFilter === "thisWeek") return diff >= 0 && diff <= 7;
+            return true;
+          });
+        }
+        // Task Types — only when Advanced Mode is on. An explicit chip pick
+        // (ttFilter !== "all") overrides hiddenTypes, so the user can drill
+        // into a category they normally hide without un-hiding it first.
+        if (advancedMode) {
+          if (ttFilter !== "all") {
+            list = list.filter(t => (t.taskType || "action") === ttFilter);
+          } else if (hiddenTypes.length > 0) {
+            list = list.filter(t => !hiddenTypes.includes(t.taskType || "action"));
+          }
+        }
+        return list;
+      }, [activeTasks, summaryFilter, today, advancedMode, ttFilter, hiddenTypes]);
 
       const filterLabel = summaryFilter === "overdue" ? "Overdue" : summaryFilter === "dueToday" ? "Due Today" : summaryFilter === "thisWeek" ? "This Week" : null;
       const filterCount = summaryFilter === "overdue" ? overdueCount : summaryFilter === "dueToday" ? dueTodayCount : summaryFilter === "thisWeek" ? thisWeekCount : 0;
@@ -1382,11 +1597,23 @@
                     <div style={S.taskName(task.complete)}>{task.name}</div>
                   )}
                   {dueText && (
-                    <div style={S.dueLabel(dueStatus)}>
-                      {dueText}
+                    <div style={{ ...S.dueLabel(dueStatus), display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                      <span>{dueText}</span>
                       {task.dueDateAuto && !task.complete && status !== "snoozed" && (
-                        <AutoMark size="sm" style={{ marginLeft: 6 }} />
+                        <AutoMark size="sm" />
                       )}
+                      {advancedMode && (() => {
+                        const tt = task.taskType || "action";
+                        // Suppress the neutral 'action' badge — it's the implicit
+                        // default and would clutter every row.
+                        if (tt === "action") return null;
+                        const c = TASK_TYPE_COLORS[tt] || TASK_TYPE_COLORS.action;
+                        return (
+                          <span style={{ display: "inline-block", fontSize: "9px", fontWeight: "700", padding: "2px 6px", borderRadius: "4px", textTransform: "uppercase", letterSpacing: "0.04em", background: c.bg, color: c.fg }}>
+                            {TASK_TYPE_LABELS[tt]}
+                          </span>
+                        );
+                      })()}
                     </div>
                   )}
                   {status === "snoozed" && task.postponeUntil && <div style={S.snoozeBadge}>snz {fmtShort(task.postponeUntil)}</div>}
@@ -1865,6 +2092,32 @@
             <label style={labelStyle}>Snooze Until</label>
             <input type="date" style={fieldStyle} value={postpone} onChange={e => handlePostpone(e.target.value)} />
 
+            {/* Task Type override (Advanced Mode only). Lists 'Action' (always
+                offered) plus every type that's currently enabled in Settings.
+                If the task is already tagged with a type that's since been
+                disabled, that option is still shown — marked "(omitted)" — so
+                the user can re-classify without un-omitting it first. */}
+            {advancedMode && (() => {
+              const tk = priorities.task_type_keywords || DEFAULT_PRIORITIES.task_type_keywords;
+              const currentTt = task.taskType || "action";
+              const opts = ["action", ...["quick_fu","track","office_only","delay"].filter(tp => tk.typeEnabled?.[tp] !== false || tp === currentTt)];
+              return (
+                <div style={{ marginTop: "12px" }}>
+                  <label style={labelStyle}>Type</label>
+                  <select
+                    value={currentTt}
+                    onChange={e => onTaskChange({ taskType: e.target.value })}
+                    style={{ ...fieldStyle, cursor: "pointer", appearance: "auto" }}
+                  >
+                    {opts.map(tp => {
+                      const omitted = tp !== "action" && tk.typeEnabled?.[tp] === false;
+                      return <option key={tp} value={tp}>{TASK_TYPE_LABELS[tp]}{omitted ? " (omitted)" : ""}</option>;
+                    })}
+                  </select>
+                </div>
+              );
+            })()}
+
             <button
               onClick={() => onSave(markComplete)}
               style={{ width: "100%", marginTop: "20px", padding: "16px", borderRadius: "12px", border: "none", background: "#3b82f6", color: "#fff", fontSize: "17px", fontWeight: "700", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", boxShadow: "0 2px 8px rgba(59,130,246,0.35)", fontFamily: "Inter, sans-serif" }}
@@ -2079,6 +2332,56 @@
                   <button onClick={dismissLastRemoval} style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 6px", color: "#92400e", fontSize: "16px", fontWeight: "700", lineHeight: 1 }}>×</button>
                 </div>
               )}
+              {/* ───── Advanced Mode card (Task Types) ───── */}
+              <div style={cardStyle}>
+                <div style={sectionTitle}>Advanced Mode</div>
+                <div style={sectionSub}>Optional power-user features. Off by default — turning them on doesn't change anything until you use them.</div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", padding: "4px 0" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: "14px", fontWeight: "600", color: "#1e293b" }}>Task Types</div>
+                    <div style={{ fontSize: "11px", color: "#64748b", lineHeight: 1.4, marginTop: "2px" }}>
+                      Categorize tasks as Quick FU, Track, Office Only, or Delay. Adds a filter bar above the active list, type badges on cards, a per-task override in the edit panel, and an eye toggle to hide a category from the main view (e.g., hide Office Only on a WFH day). Auto-detected from subject keywords; override anytime.
+                    </div>
+                  </div>
+                  <div onClick={toggleAdvancedMode}
+                       style={{ position: "relative", width: "44px", height: "26px", borderRadius: "999px", background: priorities.advancedMode ? "#3b82f6" : "#cbd5e1", cursor: "pointer", flexShrink: 0, transition: "background 0.18s" }}>
+                    <div style={{ position: "absolute", top: "3px", left: "3px", width: "20px", height: "20px", background: "#fff", borderRadius: "50%", boxShadow: "0 1px 3px rgba(0,0,0,0.2)", transform: priorities.advancedMode ? "translateX(18px)" : "translateX(0)", transition: "transform 0.18s" }}/>
+                  </div>
+                </div>
+
+                {priorities.advancedMode && (() => {
+                  const tk = priorities.task_type_keywords || DEFAULT_PRIORITIES.task_type_keywords;
+                  const order = tk.evaluationOrder || ["quick_fu", "office_only", "delay", "track"];
+                  return (
+                    <div style={{ marginTop: "14px", paddingTop: "14px", borderTop: "1px dashed #e2e8f0" }}>
+                      <div style={{ fontSize: "13px", fontWeight: "700", color: "#1e293b", marginBottom: "4px" }}>Type keywords</div>
+                      <div style={{ fontSize: "12px", color: "#64748b", marginBottom: "10px" }}>
+                        First match wins, in evaluation order. Tap a pill to disable; × deletes; the switch omits the whole type.
+                      </div>
+                      {order.map((type, idx) => {
+                        const c = TASK_TYPE_COLORS[type];
+                        const typeOn = tk.typeEnabled?.[type] !== false;
+                        const list = tk[type] || [];
+                        return (
+                          <TtKwGroup
+                            key={type}
+                            type={type}
+                            idx={idx}
+                            colors={c}
+                            typeOn={typeOn}
+                            list={list}
+                            onToggleType={() => toggleTaskTypeEnabled(type)}
+                            onTogglePill={(kwId) => toggleTaskTypeKeyword(type, kwId)}
+                            onDeletePill={(kwId) => removeTaskTypeKeyword(type, kwId)}
+                            onAdd={(phrase) => addTaskTypeKeyword(type, phrase)}
+                          />
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+
               <div style={cardStyle}>
                 <div style={sectionTitle}>Keywords</div>
                 <div style={sectionSub}>Words/phrases that nudge ranking when found in a task name. Toggle defaults on/off — add your own anytime.</div>
@@ -2185,6 +2488,7 @@
                       );
                     }
                     return <span>{user.email}</span>;
+                 
                   })()}
                   {syncStatus === "saving" && <span style={{ color: "#f59e0b", marginLeft: "8px" }}>● Saving…</span>}
                   {syncStatus === "saved"  && <span style={{ color: "#10b981", marginLeft: "8px" }}>● Saved</span>}
