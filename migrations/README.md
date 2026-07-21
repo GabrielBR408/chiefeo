@@ -18,6 +18,8 @@ the schema is small enough that a per-PR checklist works).
 | --- | ------------------------------------------ | ---------------------------------------------------------------------- |
 | 001 | `001-completed-at-trashed-at.sql`          | `tasks.completed_at` + `tasks.trashed_at` (TIMESTAMPTZ) for cleanup/cron |
 | 002 | `002-due-date-priority-auto-flags.sql`     | `tasks.due_date_auto` + `tasks.priority_auto` (BOOLEAN) for the auto/manual indicator |
+| 003 | `003-task-type.sql` *(applied 2026-05-01; not checked in)* | `tasks.task_type` column + CHECK + index (Task Types feature) |
+| 004 | `004-auth-profiles-referrals.sql`          | `public.profiles` (referral graph + `free_until` reward), signup/email-confirm triggers, RLS, backfill — Phase-1 auth layer |
 
 ## Conventions
 

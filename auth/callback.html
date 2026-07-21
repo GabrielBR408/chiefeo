@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Signing you in… · ChiefEO</title>
+  <style>
+    body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+           font-family:Inter,system-ui,sans-serif; background:#f8fafc; color:#334155; }
+    .card { text-align:center; padding:32px 24px; }
+    .spin { width:34px; height:34px; margin:0 auto 16px; border:3px solid #e2e8f0;
+            border-top-color:#3b82f6; border-radius:50%; animation:s 0.8s linear infinite; }
+    @keyframes s { to { transform:rotate(360deg); } }
+    .msg { font-size:15px; }
+    .err { color:#b91c1c; }
+    a { color:#3b82f6; font-weight:600; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="spin" id="spin"></div>
+    <div class="msg" id="msg">Confirming your account…</div>
+  </div>
+
+  <!--
+    Shared auth callback for every chiefeotool.com tool.
+    Supabase JS (detectSessionInUrl, the default) completes BOTH flows here:
+      • email-confirmation / magic links (?code=… PKCE exchange)
+      • OAuth returns (Google, etc.)
+    Once the session is established we bounce back to the app. The referral was
+    already recorded at signup (user metadata → handle_new_user trigger), so
+    there's nothing to do here but finalize the session.
+
+    SUPABASE_URL / anon key below are the project's PUBLIC values — identical to
+    the ones already shipped in index.html. The anon key is safe to expose.
+  -->
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+    const SUPABASE_URL  = 'https://dsmbppzvembacitwdrsj.supabase.co';
+    const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRzbWJwcHp2ZW1iYWNpdHdkcnNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODgwOTAsImV4cCI6MjA5MjM2NDA5MH0.Tt_xcENjIQF7KvlhFZX46U1MWfwrYZLtZEAluZzDzN0';
+
+    // Where to send the user after a successful confirmation. A ?next= param
+    // wins (validated to be a same-origin path) so different tools can redirect
+    // to their own landing spot; otherwise go to the site root.
+    function safeNext() {
+      try {
+        const raw = new URLSearchParams(location.search).get('next');
+        if (raw && raw.startsWith('/') && !raw.startsWith('//')) return raw;
+      } catch {}
+      return '/';
+    }
+
+    const msg  = document.getElementById('msg');
+    const spin = document.getElementById('spin');
+
+    try {
+      const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+      // Give the client a tick to process the code/hash in the URL.
+      const { data, error } = await sb.auth.getSession();
+      if (error) throw error;
+
+      if (data?.session) {
+        msg.textContent = 'Confirmed! Redirecting…';
+        location.replace(safeNext());
+      } else {
+        // No session yet — most often an already-used or expired link.
+        spin.style.display = 'none';
+        msg.className = 'msg';
+        msg.innerHTML = 'Your account is confirmed. <a href="/">Continue to sign in →</a>';
+      }
+    } catch (e) {
+      spin.style.display = 'none';
+      msg.className = 'msg err';
+      msg.textContent = 'We couldn’t confirm this link. It may have expired — try signing in again.';
+    }
+  </script>
+</body>
+</html>
