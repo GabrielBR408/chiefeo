@@ -78,7 +78,7 @@ export function clearStoredReferralCode() {
 // ── The core question: who's signed in? (never blocks) ───────────
 // Returns { isLoggedIn, user, referralCode }. referralCode is the signed-in
 // user's OWN shareable code (null while anonymous). Reads the profile via RLS
-// (migrations/004 grants each user SELECT on their own row).
+// (the live profiles_select_own policy grants each user SELECT on their own row).
 export async function getAuthState() {
   const sb = client();
   const { data: { session } } = await sb.auth.getSession();
@@ -108,10 +108,12 @@ export function onChange(cb) {
 }
 
 // ── Auth entry points (the "auth routes", SDK-native) ────────────
-// Signup carries the stored referral code into user metadata, where the
-// handle_new_user() DB trigger reads it (key: 'ref') to set referred_by.
+// Signup carries the stored referral code into user metadata under the key the
+// live handle_new_user() trigger reads — `referred_by_code` — to set
+// referred_by. (Must stay in sync with that trigger; do not rename to `ref`.)
 // Email verification is enforced by the Supabase project's "Confirm email"
-// setting; emailRedirectTo points at the shared /auth/callback page.
+// setting; the referral is only *credited* once the new user verifies (the
+// on_auth_user_verified trigger). emailRedirectTo points at the shared callback.
 export async function signUpWithReferral(email, password, opts = {}) {
   const sb = client();
   const ref = opts.referralCode ?? getStoredReferralCode();
@@ -122,7 +124,7 @@ export async function signUpWithReferral(email, password, opts = {}) {
     email,
     password,
     options: {
-      data: ref ? { ref } : {},
+      data: ref ? { referred_by_code: ref } : {},
       ...(redirectTo ? { emailRedirectTo: redirectTo } : {}),
     },
   });

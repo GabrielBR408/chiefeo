@@ -21,9 +21,14 @@ of tools behind a hard login.
 
 ## What's in here
 
+> **The database schema is already live** in the Supabase project
+> (`public.profiles` + referral triggers + RLS), applied out-of-band — **not**
+> from a migration in this repo. This directory ships the *client + serverless*
+> layer that talks to it. The data model below documents the **live** objects so
+> the client stays in sync with them.
+
 | File | Role | Consumed by |
 | --- | --- | --- |
-| `../migrations/004-auth-profiles-referrals.sql` | Schema: `public.profiles` + referral triggers + RLS + backfill | Supabase (applied manually) |
 | `../api/referral.js` | Serverless: validate a code, read your referral status | Any tool / signup page |
 | `optional-access.js` | Framework-agnostic client: auth state, referral capture, signup/login/logout, anon banner | Every tool |
 | `react-optional-access.js` | React binding: `useOptionalAccess()` hook + `<AccountBanner/>` | React tools |
@@ -45,51 +50,64 @@ same surface with one shared implementation.
 
 ---
 
-## Data model (migration 004)
+## Data model (live in Supabase)
 
 `public.profiles`, one row per `auth.users` account, keyed on `user_id` (same
 convention as `tasks` / `priorities`):
 
 | Column | Notes |
 | --- | --- |
-| `user_id` | PK → `auth.users(id)`, cascade delete |
-| `email` | copied from auth at signup |
-| `referral_code` | unique among active rows, 8-char, auto-generated |
+| `user_id` | PK → `auth.users(id)` |
+| `email` | copied from auth at signup (NOT NULL, defaults to `''`) |
+| `referral_code` | unique, 8-char, unambiguous alphabet (no O/I/L/0/1) |
 | `referred_by` | nullable self-FK → referrer's `user_id` |
-| `referral_count` | **confirmed** signups this user referred |
-| `referral_credited` | internal: has this row been counted for its referrer |
-| `free_until` | reward window; set once `referral_count` first hits **3** |
+| `referral_count` | **verified** signups this user referred |
+| `free_until` | reward window; extended each time `referral_count` hits a multiple of the threshold |
 | `created_at` / `deleted_at` | soft delete keeps the graph intact |
 
 **The graph is maintained entirely by database triggers** (can't be raced or
 faked from the client):
 
-1. `handle_new_user` — on `auth.users` INSERT: creates the profile, generates a
-   unique `referral_code`, resolves `referred_by` from signup metadata
-   (`raw_user_meta_data.ref`). Blocks self-referral.
-2. `handle_email_confirmed` — on `auth.users` UPDATE when `email_confirmed_at`
-   goes NULL→set: credits the referral. (OAuth signups arrive confirmed and are
-   credited inline by #1.)
-3. `credit_referral` — idempotent: bumps the referrer's `referral_count` once,
-   and grants `free_until = now() + 365 days` the first time they reach 3.
-4. `guard_profile_columns` — blocks the client from editing referral/reward
-   columns even though RLS lets it update its own row.
+1. `handle_new_user` (`on_auth_user_created`, AFTER INSERT) — creates the
+   profile, generates a unique `referral_code` via `generate_referral_code()`,
+   resolves `referred_by` from signup metadata key **`referred_by_code`**
+   (case-insensitive). Blocks self-referral; wrapped so signup never fails.
+2. `handle_referral_verified` (`on_auth_user_verified`, AFTER UPDATE OF
+   `email_confirmed_at` WHEN NULL→set) — credits the referrer: `referral_count
+   += 1`, and every Nth referral (`count % threshold == 0`) extends `free_until`
+   by the reward interval.
 
-**Anti-gaming:** referrals count only on *email confirmation*, each at most
-once. Tune the threshold (3) and reward (365 days) in the two labelled
-constants inside `credit_referral()`.
+**Config helpers:** `referral_reward_threshold()` → **3**,
+`referral_reward_interval()` → **6 months**. Change the reward by redefining
+those two functions — no other code references the raw values.
+
+**Anti-gaming:** a referral counts only on *email verification*, exactly once
+(the trigger's `WHEN (old.email_confirmed_at IS NULL AND new … IS NOT NULL)`
+guard fires a single time per account).
+
+> **Known gap — OAuth referrals.** `on_auth_user_verified` is AFTER UPDATE, but
+> OAuth (e.g. Google) signups arrive already-confirmed at INSERT, so no update
+> fires and an OAuth-referred signup is **not** credited. If OAuth referrals
+> should count, add an inline `handle_referral_verified`-equivalent call in
+> `handle_new_user` for the `email_confirmed_at IS NOT NULL` case. Not fixed
+> here — it's a change to the live trigger, for Gabe to approve.
+
+**Contract for the client:** signup must send the referrer code under
+`options.data.referred_by_code` (this is exactly what `signUpWithReferral`
+does). Renaming that key silently breaks referral linking.
 
 ---
 
-## Setup checklist (Gabe approves each)
+## Setup checklist
 
-1. **Apply the migration.** Paste `migrations/004-auth-profiles-referrals.sql`
-   into the Supabase SQL editor and run it, then update its `Applied in
-   production:` line (per `migrations/README.md`).
-2. **Supabase Auth settings** (Dashboard → Authentication):
-   - **Confirm email: ON** — required; referrals credit on confirmation.
+1. **Schema** — already live. Nothing to apply.
+2. **Supabase Auth settings** (Dashboard → Authentication) — *required for
+   referrals to credit at all*, and the one part this repo can't set for you:
+   - **Confirm email: ON**. Referral credit fires on the email-verification
+     transition; with confirm off, `email_confirmed_at` is set at signup and the
+     verify trigger never runs.
    - **Redirect URLs**: add `https://chiefeotool.com/auth/callback.html` (and
-     each tool's origin equivalent, plus a localhost entry for dev).
+     each tool origin, plus a localhost entry for dev).
    - Confirm-email template: point the link at `/auth/callback.html`.
 3. **Env vars** (already present for the intake/score APIs; `api/referral.js`
    reuses them): `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`. Optional:
@@ -133,14 +151,14 @@ const { referralCode } = await getAuthState();
    stashes `ABC123`.
 2. They use the tool anonymously; the banner invites them to create an account.
 3. `signUpWithReferral(email, pw)` → Supabase signup with
-   `options.data.ref = 'ABC123'` and `emailRedirectTo` = `/auth/callback.html`.
-   `handle_new_user` creates their profile, generates their own code, links
-   `referred_by`.
+   `options.data.referred_by_code = 'ABC123'` and `emailRedirectTo` =
+   `/auth/callback.html`. `handle_new_user` creates their profile, generates
+   their own code, links `referred_by`.
 4. They click the confirm-email link → `callback.html` finalizes the session →
-   `handle_email_confirmed` credits the referral to `ABC123`'s owner.
-5. On the referrer's **3rd** confirmed referral, `free_until` is set. Their
-   tools can read it (`GET /api/referral` → `unlocked: true`) and act on it
-   whenever the paywall is switched on.
+   `handle_referral_verified` credits the referral to `ABC123`'s owner.
+5. On every **3rd** verified referral, the referrer's `free_until` is extended by
+   6 months. Tools read it (`GET /api/referral` → `unlocked: true` while the
+   window is active) and can act on it whenever the paywall is switched on.
 
 ---
 

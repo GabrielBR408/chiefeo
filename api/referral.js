@@ -11,8 +11,8 @@
 //     Returns: { valid: boolean, code: "CODE" }   (never reveals whose code it is)
 //
 // This endpoint only READS. The referral graph is written exclusively by the
-// database triggers in migrations/004 (create profile, credit on email confirm),
-// so there is no write path here to abuse.
+// live database triggers (handle_new_user on signup, handle_referral_verified
+// on email confirmation), so there is no write path here to abuse.
 //
 // Environment variables required:
 //   SUPABASE_URL          — Supabase project URL
@@ -21,7 +21,10 @@
 // Optional:
 //   REFERRAL_BASE_URL     — base for referral links (default https://chiefeotool.com)
 
-const REFERRAL_THRESHOLD = 3; // keep in sync with credit_referral() in migrations/004
+// Mirrors the live DB's referral_reward_threshold() (currently 3). The reward
+// itself (free_until, +6 months every Nth referral) is granted by the
+// handle_referral_verified() trigger — this endpoint only reports state.
+const REFERRAL_THRESHOLD = 3;
 
 // ── Resolve a user from x-api-key (mirrors api/intake.js) ─────────
 function resolveUserFromApiKey(apiKey) {
@@ -120,17 +123,21 @@ export default async function handler(req, res) {
     if (rows.length === 0) {
       // Profile row is created by the signup trigger; a missing row means the
       // migration hasn't run for this account yet.
-      return res.status(404).json({ error: 'No profile for this user (has migration 004 run?)' });
+      return res.status(404).json({ error: 'No profile row for this user' });
     }
     const p = rows[0];
     const count = p.referral_count ?? 0;
+    // `unlocked` = a free window is currently active (the reward the referral
+    // system actually grants). `reachedThreshold` = has hit the count milestone.
+    const unlocked = !!p.free_until && new Date(p.free_until).getTime() > Date.now();
     return res.status(200).json({
       referralCode: p.referral_code,
       referralLink: referralLinkFor(p.referral_code),
       referralCount: count,
       referredBy: p.referred_by,
       freeUntil: p.free_until,
-      unlocked: count >= REFERRAL_THRESHOLD,
+      unlocked,
+      reachedThreshold: count >= REFERRAL_THRESHOLD,
       threshold: REFERRAL_THRESHOLD,
     });
   } catch (err) {
