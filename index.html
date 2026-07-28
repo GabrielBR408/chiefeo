@@ -2510,11 +2510,6 @@
                 <button style={S.menuItem} onMouseOver={e => e.target.style.background="#f1f5f9"} onMouseOut={e => e.target.style.background="none"} onClick={() => { setShowPrioritiesPage(true); setMenuOpen(false); }}>Priorities settings…</button>
                 <button style={S.menuItem} onMouseOver={e => e.target.style.background="#f1f5f9"} onMouseOut={e => e.target.style.background="none"} onClick={() => { rescoreAllTasks(); setMenuOpen(false); }}>Re-score all active tasks</button>
                 <div style={{ height: "1px", background: "#e2e8f0", margin: "4px 0" }}></div>
-                <a href="/tools/utilities-forecaster" target="_blank" rel="noopener" style={{ ...S.menuItem, display: "flex", alignItems: "center", justifyContent: "space-between", textDecoration: "none", boxSizing: "border-box" }} onMouseOver={e => e.currentTarget.style.background="#f1f5f9"} onMouseOut={e => e.currentTarget.style.background="none"} onClick={() => setMenuOpen(false)}>
-                  <span>Utilities Forecaster</span>
-                  <span style={{ fontSize: "9px", fontWeight: "700", letterSpacing: "0.4px", textTransform: "uppercase", color: "#92400e", background: "#fef3c7", border: "1px solid #fde68a", borderRadius: "999px", padding: "1px 7px" }}>Beta</span>
-                </a>
-                <div style={{ height: "1px", background: "#e2e8f0", margin: "4px 0" }}></div>
                 <button style={S.menuItem} onMouseOver={e => e.target.style.background="#f1f5f9"} onMouseOut={e => e.target.style.background="none"} onClick={() => { onSignOut(); setMenuOpen(false); }}>Sign out</button>
               </div>
             )}
